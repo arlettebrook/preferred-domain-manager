@@ -106,11 +106,11 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 2. 获取自己的 Telegram 数字用户 ID（可使用可信的 ID 查询 Bot），不要填写用户名或群组名称。
 3. 登录 `/admin` → “全局设置” → “Telegram Bot”，填写 Bot Token、随机 Webhook Secret 和允许操作的用户 ID，每行一个。
 4. 点击“保存 Telegram 设置”，再点击“测试 Bot”确认 Token 有效。
-5. 点击“设置 Webhook”。系统会自动使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。如果之前已经设置过 Webhook，升级版本后需要重新点击一次以启用按钮回调。
+5. 点击“设置 Webhook”。系统会自动设置 Webhook 和 Telegram 菜单命令，并使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。也可以单独点击“同步菜单命令”。如果之前已经设置过 Webhook，升级版本后需要重新点击一次以启用按钮回调。
 
 Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定义域名，请确保该域名的 Worker 路由已经生效。需要停用时点击“删除 Webhook”。
 
-打开 Bot 后可直接使用内联键盘：主菜单可以复制默认域名；查看记录支持分页，每条记录提供“复制域名”“复制记录”“编辑”和删除按钮；详情页还可以分别复制域名、内容、完整记录和记录 ID。完整编辑可以重新选择类型、根域名/泛域名并输入内容；添加记录会依次选择类型、根域名/泛域名，再输入内容；删除必须二次确认。
+打开 Bot 后可直接使用内联键盘：主菜单可以复制默认域名；DNS 列表按序号显示，点击域名或记录内容即可复制；编辑和删除使用 `/edit 序号`、`/delete 序号`，不再依赖每条记录的操作按钮。完整编辑可以重新选择类型、根域名/泛域名并输入内容；添加记录会依次选择类型、根域名/泛域名，再输入内容；删除必须二次确认。
 
 同时支持以下命令：
 
@@ -124,6 +124,8 @@ Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定�
 /dns delete <记录ID>
 /cancel
 ```
+
+Telegram 菜单会显示 `/start`、`/dns`、`/add`、`/edit`、`/delete`、`/help` 和 `/cancel`。发送 `/dns` 后，记录按当前页从 1 开始编号；例如发送 `/edit 2` 编辑第二条，发送 `/delete 2` 删除第二条。序号选择状态保存 10 分钟，刷新或翻页后应使用最新页面中的序号。
 
 Bot 与管理面板共用 DNS 规则：只能操作默认域名和 `*.默认域名`，只允许 A、AAAA、CNAME；CNAME 保存时会自动删除同名 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
 
@@ -193,6 +195,7 @@ npm run deploy
 - `POST /api/auth/logout`：注销会话。
 - `POST /api/telegram/test`：测试 Telegram Bot Token。
 - `POST /api/telegram/webhook` / `DELETE /api/telegram/webhook`：设置或删除 Telegram Webhook。
+- `POST /api/telegram/commands`：同步 Telegram Bot 菜单命令。
 - `POST /telegram/webhook`：Telegram 回调入口，由 Telegram 调用，不需要管理员 Cookie。
 
 后台的“全局设置”区域提供独立的“保存设置”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除。DNS 记录名称限定为默认域名和泛域名，类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。

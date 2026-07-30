@@ -8,7 +8,7 @@ import { Env, IpSource, Settings } from "./types";
 import { dedupeIps, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
-import { deleteTelegramWebhook, setTelegramWebhook, telegramBotInfo } from "./services/telegram";
+import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./services/telegram";
 
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
@@ -72,6 +72,10 @@ export async function handleApi(request: Request, env: Env) {
   }
   if (url.pathname === "/api/telegram/webhook" && request.method === "DELETE") {
     await deleteTelegramWebhook(await getSettings(env));
+    return json({ ok: true });
+  }
+  if (url.pathname === "/api/telegram/commands" && request.method === "POST") {
+    await setTelegramCommands(await getSettings(env));
     return json({ ok: true });
   }
 
