@@ -3,6 +3,7 @@ main = "src/main.ts"
 compatibility_date = "2026-07-30"
 compatibility_flags = ["nodejs_compat"]
 minify = true
+keep_vars = true
 
 # 发布前执行：wrangler kv namespace create PDM_KV
 [[kv_namespaces]]
