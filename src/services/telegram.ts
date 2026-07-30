@@ -229,7 +229,7 @@ function filteredRecords(records: DnsRecord[], domain: string) {
 }
 
 function recordText(record: DnsRecord) {
-  return `${escapeHtml(record.type)} <code>${escapeHtml(record.name)}</code> <code>${escapeHtml(record.content)}</code>`;
+  return `${escapeHtml(record.type)}   <code>${escapeHtml(record.name)}</code>   <code>${escapeHtml(record.content)}</code>`;
 }
 
 function recordListText(records: DnsRecord[], page: number, totalPages: number, totalCount: number, domain: string) {
@@ -238,7 +238,7 @@ function recordListText(records: DnsRecord[], page: number, totalPages: number, 
     `DNS 记录（第 ${page + 1}/${totalPages} 页，共 ${totalCount} 条）`,
     "点击域名或 IP/CNAME 内容可复制；点击序号选择操作。",
     "",
-    records.map((record, index) => `${index + 1}. ${recordText(record)}`).join("\n\n\n"),
+    records.map((record, index) => `${index + 1}. ${recordText(record)}`).join("\n\n"),
   ].join("\n");
 }
 
