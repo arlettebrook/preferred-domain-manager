@@ -186,24 +186,22 @@ function homeText(settings: Settings) {
   const target = settings.defaultDomain && settings.cfZoneId
     ? `当前域名：<code>${escapeHtml(settings.defaultDomain)}</code>`
     : "当前尚未完成默认域名和 Zone ID 配置";
-  return [`优选域名管理 Bot`, target, "", "请选择要执行的操作："].join("\n");
+  return [`优选域名管理 Bot`, target].join("\n");
 }
 
 function helpText() {
   return [
     "优选域名管理 Bot",
     "",
-    "支持内联键盘，也支持以下命令：",
-    "列表和详情中的域名、记录展示项可直接点击复制。",
     "/start 或 /help  打开主菜单",
-    "/dns 或 /dns list  查看 DNS 记录",
+    "/dns  查看 DNS 记录",
+    "/add  新增 DNS 记录",
     "/dns add A 〈域名〉 〈IPv4〉",
     "/dns add AAAA 〈域名〉 〈IPv6〉",
     "/dns add CNAME 〈域名〉 〈目标〉",
     "/edit 〈序号〉 选择记录并编辑",
     "/delete 〈序号〉 选择记录并删除",
-    "/dns update 〈记录ID〉 〈类型〉 〈域名〉 〈内容〉",
-    "/dns delete 〈记录ID〉（兼容旧命令）",
+    "点击记录中的等宽文字可复制，点击序号可编辑。",
     "",
     "仅允许默认域名和 *.默认域名；仅支持 A、AAAA、CNAME；TTL 固定最低值；CNAME 会自动删除同名 A/AAAA。",
   ].join("\n");
@@ -215,15 +213,13 @@ function filteredRecords(records: DnsRecord[], domain: string) {
 }
 
 function recordText(record: DnsRecord) {
-  return `<code>${escapeHtml(record.type)} ${escapeHtml(record.name)}</code>\n<code>${escapeHtml(record.content)}</code>\n<code>TTL：${escapeHtml(record.ttl ?? "-")}</code> · <code>${record.proxied ? "橙云" : "灰云"}</code>`;
+  return `<code>${escapeHtml(record.type)}</code> <code>${escapeHtml(record.name)}</code>\n<code>${escapeHtml(record.content)}</code>\nTTL：${escapeHtml(record.ttl ?? "-")} · ${record.proxied ? "橙云" : "灰云"}`;
 }
 
 function recordListText(records: DnsRecord[], page: number, totalPages: number, domain: string) {
   if (!records.length) return `DNS 记录\n\n<code>${escapeHtml(domain)}</code> 和 <code>*.${escapeHtml(domain)}</code> 当前没有可管理记录。\n\n使用 /add 新增记录。`;
   return [
     `DNS 记录（第 ${page + 1}/${totalPages} 页）`,
-    "域名、内容和 TTL 使用等宽格式，点击即可复制。",
-    "编辑：点击下方序号，或使用 /edit 序号；删除：/delete 序号",
     "",
     ...records.map((record, index) => `${index + 1}. ${recordText(record)}`),
   ].join("\n\n");
@@ -331,7 +327,7 @@ async function showRecordDetail(settings: Settings, env: Env, callback: Telegram
   const target = targetFromSettings(settings);
   const record = await findRecord(target, env, settings, id);
   if (!record) throw new HttpError(404, "记录不存在或已被删除");
-  await editText(settings, callback, `DNS 记录详情\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, detailKeyboard(record));
+  await editText(settings, callback, recordText(record), detailKeyboard(record));
 }
 
 async function handleCallback(settings: Settings, env: Env, callback: TelegramCallbackQuery) {
@@ -418,7 +414,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const target = targetFromSettings(settings);
     const record = await findRecord(target, env, settings, id);
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
-    return editText(settings, callback, `确认删除以下记录？\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, {
+    return editText(settings, callback, `确认删除？\n\n${recordText(record)}`, {
       inline_keyboard: [[button("✅ 确认删除", `delete-confirm:${record.id}`), button("取消", `edit:${record.id}`)]],
     });
   }
@@ -429,7 +425,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
     await deleteDnsRecord(target, id, env, settings.cfApiToken);
     await clearPending(env, chatId, callback.from.id);
-    return editText(settings, callback, `已删除 DNS 记录\n\n${recordText(record)}`, resultKeyboard());
+    return editText(settings, callback, `已删除\n\n${recordText(record)}`, resultKeyboard());
   }
   throw new HttpError(400, "无效的按钮操作");
 }
@@ -442,12 +438,12 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
   if (pending.kind === "add") {
     const record = await createDnsRecord(target, { type: pending.type, name: pending.name, content }, env, settings.cfApiToken);
     await clearPending(env, chatId, message.from!.id);
-    return sendText(settings, chatId, `新增成功\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, resultKeyboard());
+    return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (!pending.recordId) throw new HttpError(400, "编辑状态已失效，请重新选择记录");
   const record = await updateDnsRecord(target, pending.recordId, { type: pending.type, name: pending.name, content }, env, settings.cfApiToken);
   await clearPending(env, chatId, message.from!.id);
-  return sendText(settings, chatId, `修改成功\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, resultKeyboard());
+  return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard());
 }
 
 async function handleCommand(settings: Settings, env: Env, message: TelegramMessage) {
@@ -471,21 +467,21 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     const type = recordType(args[1]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
     const record = await createDnsRecord(target, { type, name: args[2], content: args.slice(3).join(" ") }, env, settings.cfApiToken);
-    return sendText(settings, chatId, `新增成功\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, resultKeyboard());
+    return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length >= 5) {
     const type = recordType(args[2]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
     const record = await updateDnsRecord(target, args[1], { type, name: args[3], content: args.slice(4).join(" ") }, env, settings.cfApiToken);
-    return sendText(settings, chatId, `修改成功\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, resultKeyboard());
+    return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "edit" && args.length === 2) {
     const record = await selectedRecord(target, env, settings, chatId, message.from!.id, args[1]);
-    return sendText(settings, chatId, `已选择第 ${args[1]} 条记录\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, detailKeyboard(record));
+    return sendText(settings, chatId, recordText(record), detailKeyboard(record));
   }
   if (command === "delete" && args.length === 2 && /^\d+$/.test(args[1])) {
     const record = await selectedRecord(target, env, settings, chatId, message.from!.id, args[1]);
-    return sendText(settings, chatId, `确认删除第 ${args[1]} 条记录？\n\n${recordText(record)}\n\nID：<code>${escapeHtml(record.id)}</code>`, {
+    return sendText(settings, chatId, `确认删除？\n\n${recordText(record)}`, {
       inline_keyboard: [[button("✅ 确认删除", `delete-confirm:${record.id}`), button("取消", `edit:${record.id}`)]],
     });
   }

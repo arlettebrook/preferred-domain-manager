@@ -110,18 +110,16 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 
 Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定义域名，请确保该域名的 Worker 路由已经生效。需要停用时点击“删除 Webhook”。
 
-打开 Bot 后可直接使用内联键盘：DNS 类型、域名、内容和 TTL 使用 Telegram 等宽代码格式，点击代码文本即可复制；DNS 列表按序号显示，点击序号进入对应记录编辑；编辑和删除也支持 `/edit 序号`、`/delete 序号`。完整编辑可以重新选择类型、根域名/泛域名并输入内容；添加记录会依次选择类型、根域名/泛域名，再输入内容；删除必须二次确认。
+打开 Bot 后可直接使用内联键盘：每条 DNS 记录独立展示，类型、域名和内容使用 Telegram 等宽代码格式，点击即可复制；TTL 和灰云状态为普通文字。DNS 列表按序号显示，点击序号进入对应记录编辑；编辑和删除也支持 `/edit 序号`、`/delete 序号`。完整编辑可以重新选择类型、根域名/泛域名并输入内容；添加记录会依次选择类型、根域名/泛域名，再输入内容；删除必须二次确认。
 
-同时支持以下命令：
+支持以下命令：
 
 ```text
 /start 或 /help
-/dns 或 /dns list
-/dns add A example.com 1.1.1.1
-/dns add AAAA '*.example.com' 2606:4700:4700::1111
-/dns add CNAME example.com target.example.net
-/dns update <记录ID> <类型> <域名> <内容>
-/dns delete <记录ID>
+/dns
+/add
+/edit 2
+/delete 2
 /cancel
 ```
 
