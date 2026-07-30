@@ -9,6 +9,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
+- DNS 编辑仅允许默认域名和 `*.默认域名` 两个名称，并仅允许 `A`、`AAAA`、`CNAME` 三种类型；保存 CNAME 时会自动删除同名的 A/AAAA 记录。
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式。
@@ -95,11 +96,11 @@ IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
 
 这些变量不能写入 `wrangler.toml` 或 `.dev.vars`，只能在 `/admin` 页面保存到 KV。
 
-部署后也可以直接打开 `/admin`，在“运行变量”区域编辑：
+部署后也可以直接打开 `/admin`，在“全局设置”区域编辑：
 
-- `CF_API_TOKEN`：全局 Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
+- `CF_API_TOKEN`：Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
 - `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
-- `CF_ZONE_ID`：默认 Zone ID。
+- `CF_ZONE_ID`：Cloudflare Zone ID。
 - `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
 
 面板保存的配置写入 KV，并优先于 Wrangler 初始变量。`DEFAULT_DOMAIN + CF_ZONE_ID` 始终作为同步目标。全局 Token 只返回“已配置”状态，不会通过管理 API 返回明文。
@@ -132,7 +133,7 @@ ADMIN_PASSWORD=change-me
 SESSION_SECRET=local-development-secret
 ```
 
-启动后打开 `/admin`，在“运行变量”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 和 `IP_SOURCES`。
+启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`；IP 来源在仪表盘中配置。
 
 如果需要绕过 GitHub 连接直接从本地发布：
 
@@ -169,4 +170,4 @@ npm run deploy
 - `POST /api/sync`：执行默认 Zone 的 DNS Diff Update。
 - `POST /api/auth/logout`：注销会话。
 
-后台的“运行变量”区域提供独立的“保存运行变量”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
+后台的“全局设置”区域提供独立的“保存设置”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除。DNS 记录名称限定为默认域名和泛域名，类型限定为 A、AAAA、CNAME，TTL 新建时默认为“自动”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。

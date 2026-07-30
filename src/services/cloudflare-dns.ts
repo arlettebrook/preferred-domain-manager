@@ -25,16 +25,28 @@ async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: st
   return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
 }
 
-function validateRecordInput(input: Partial<DnsRecord>) {
-  const allowedTypes = new Set(["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV", "URI"]);
+function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
+  const allowedTypes = new Set(["A", "AAAA", "CNAME"]);
   const type = String(input.type ?? "").toUpperCase();
   const name = String(input.name ?? "").trim().toLowerCase();
   const content = String(input.content ?? "").trim();
   if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
+  const domain = normalizeDomain(zone.domain);
+  const allowedNames = new Set([domain, `*.${domain}`]);
+  if (!domain || !allowedNames.has(name)) throw new HttpError(400, `记录名称只能是 ${domain} 或 *.${domain}`);
   if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
   const ttl = input.ttl === undefined || input.ttl === null ? 1 : Number(input.ttl);
   if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) throw new HttpError(400, "TTL 必须是 1 到 86400 的整数");
   return { type, name, content, ttl, proxied: input.proxied === true, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
+}
+
+async function removeAddressRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
+  const records = await listDnsRecords(zone, env, globalApiToken);
+  const addressRecords = records.filter((record) => record.name === name && (record.type === "A" || record.type === "AAAA") && record.id !== exceptId);
+  for (const record of addressRecords) {
+    await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
+  }
+  return addressRecords.length;
 }
 
 export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
@@ -48,12 +60,25 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 }
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
-  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validateRecordInput(input)) }, env, globalApiToken);
+  const validated = validateRecordInput(zone, input);
+  if (validated.type === "CNAME") await removeAddressRecords(zone, validated.name, env, globalApiToken);
+  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
 }
 
 export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
-  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(validateRecordInput(input)) }, env, globalApiToken);
+  const validated = validateRecordInput(zone, input);
+  if (validated.type === "CNAME") {
+    const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
+    if (!current) throw new HttpError(404, "DNS 记录不存在");
+    const currentIsAddress = current.type === "A" || current.type === "AAAA";
+    await removeAddressRecords(zone, validated.name, env, globalApiToken, currentIsAddress ? undefined : id);
+    if (currentIsAddress) {
+      await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
+      return createDnsRecord(zone, validated, env, globalApiToken);
+    }
+  }
+  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(validated) }, env, globalApiToken);
 }
 
 export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
