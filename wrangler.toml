@@ -7,7 +7,7 @@ minify = true
 # 发布前执行：wrangler kv namespace create PDM_KV
 [[kv_namespaces]]
 binding = "PDM_KV"
-id = "replace-with-your-kv-namespace-id"
+id = "137a009b5cb4459a9700f515cbdf271f"
 
 [[durable_objects.bindings]]
 name = "SYNC_LOCK"
