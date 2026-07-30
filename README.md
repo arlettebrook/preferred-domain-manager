@@ -14,7 +14,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式。
-- Telegram Bot DNS 管理：白名单用户可查看、新建、修改和删除 DNS 记录，并通过 Webhook 接收命令。
+- Telegram Bot DNS 管理：白名单用户可通过内联键盘查看、新建、修改和删除 DNS 记录，也兼容文本命令。
 
 ## 项目结构
 
@@ -106,11 +106,13 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 2. 获取自己的 Telegram 数字用户 ID（可使用可信的 ID 查询 Bot），不要填写用户名或群组名称。
 3. 登录 `/admin` → “全局设置” → “Telegram Bot”，填写 Bot Token、随机 Webhook Secret 和允许操作的用户 ID，每行一个。
 4. 点击“保存 Telegram 设置”，再点击“测试 Bot”确认 Token 有效。
-5. 点击“设置 Webhook”。系统会自动使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。
+5. 点击“设置 Webhook”。系统会自动使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。如果之前已经设置过 Webhook，升级版本后需要重新点击一次以启用按钮回调。
 
 Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定义域名，请确保该域名的 Worker 路由已经生效。需要停用时点击“删除 Webhook”。
 
-支持的命令：
+打开 Bot 后可直接使用内联键盘：查看记录支持分页，每条记录提供快速修改内容、完整编辑和删除按钮；完整编辑可以重新选择类型、根域名/泛域名并输入内容；添加记录会依次选择类型、根域名/泛域名，再输入内容；删除必须二次确认。
+
+同时支持以下命令：
 
 ```text
 /start 或 /help
@@ -120,6 +122,7 @@ Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定�
 /dns add CNAME example.com target.example.net
 /dns update <记录ID> <类型> <域名> <内容>
 /dns delete <记录ID>
+/cancel
 ```
 
 Bot 与管理面板共用 DNS 规则：只能操作默认域名和 `*.默认域名`，只允许 A、AAAA、CNAME；CNAME 保存时会自动删除同名 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
