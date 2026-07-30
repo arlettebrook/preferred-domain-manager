@@ -1,0 +1,60 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PDM_KV_NAMESPACE_ID: ${{ secrets.PDM_KV_NAMESPACE_ID }}
+      PDM_ADMIN_PASSWORD: ${{ secrets.PDM_ADMIN_PASSWORD }}
+      PDM_SESSION_SECRET: ${{ secrets.PDM_SESSION_SECRET }}
+      PDM_CF_API_TOKEN: ${{ secrets.PDM_CF_API_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$PDM_KV_NAMESPACE_ID" || { echo "Missing PDM_KV_NAMESPACE_ID"; exit 1; }
+          [[ "$PDM_KV_NAMESPACE_ID" != "replace-with-your-kv-namespace-id" ]] || { echo "Replace the KV namespace placeholder"; exit 1; }
+      - name: Inject KV namespace ID
+        shell: bash
+        run: sed -i "s/replace-with-your-kv-namespace-id/$PDM_KV_NAMESPACE_ID/g" wrangler.toml
+      - name: Deploy Worker
+        run: npm run deploy:ci
+      - name: Set Worker runtime secrets
+        shell: bash
+        run: |
+          test -n "$PDM_ADMIN_PASSWORD" || { echo "Missing PDM_ADMIN_PASSWORD"; exit 1; }
+          test -n "$PDM_SESSION_SECRET" || { echo "Missing PDM_SESSION_SECRET"; exit 1; }
+          printf '%s' "$PDM_ADMIN_PASSWORD" | npx wrangler secret put ADMIN_PASSWORD
+          printf '%s' "$PDM_SESSION_SECRET" | npx wrangler secret put SESSION_SECRET
+          if [ -n "$PDM_CF_API_TOKEN" ]; then
+            printf '%s' "$PDM_CF_API_TOKEN" | npx wrangler secret put CF_API_TOKEN
+          fi
