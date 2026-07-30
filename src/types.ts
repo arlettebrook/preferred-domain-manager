@@ -3,10 +3,6 @@ export interface Env {
   SYNC_LOCK: DurableObjectNamespace;
   ADMIN_PASSWORD?: string;
   SESSION_SECRET?: string;
-  CF_API_TOKEN?: string;
-  DEFAULT_DOMAIN?: string;
-  CF_ZONE_ID?: string;
-  IP_SOURCES?: string;
 }
 
 export interface DnsTarget {

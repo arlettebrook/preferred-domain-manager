@@ -3,7 +3,7 @@ import { createSession, expiredCookie, isValidSession, sessionCookie } from "./s
 import { collectPreferredIps } from "./services/ip-sources";
 import { getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
-import { Env, IpSource } from "./types";
+import { Env, IpSource, Settings } from "./types";
 import { dedupeIps, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -26,7 +26,7 @@ async function saveConfig(request: Request, env: Env) {
     url: String(source.url || "").trim(),
     enabled: source.enabled !== false,
   })).filter((source) => /^https?:\/\//i.test(source.url));
-  const settings = {
+  const settings: Settings = {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
     defaultDomain: normalizeDomain(String(input.defaultDomain || "")),
@@ -35,7 +35,9 @@ async function saveConfig(request: Request, env: Env) {
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-  return json(publicSettings(settings));
+  const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
+  if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
+  return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
 }
 
 export async function handleApi(request: Request, env: Env) {
@@ -50,7 +52,7 @@ export async function handleApi(request: Request, env: Env) {
   await requireAuth(request, env);
 
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
-  if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)));
+  if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {

@@ -20,10 +20,3 @@ new_sqlite_classes = ["SyncLock"]
 [triggers]
 crons = ["*/10 * * * *"]
 
-[vars]
-# 必填项建议用 wrangler secret put 设置，不要把真实值提交到仓库。
-# ADMIN_PASSWORD = "change-me"
-# SESSION_SECRET = "a-long-random-secret"
-# CF_API_TOKEN = "optional-global-zone-api-token"
-# DEFAULT_DOMAIN = "example.com"
-# CF_ZONE_ID = "optional-default-zone-id"

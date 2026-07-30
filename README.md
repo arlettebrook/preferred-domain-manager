@@ -93,7 +93,7 @@ CF_ZONE_ID=你的 Zone ID
 IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
 ```
 
-这些变量也可以写入 `wrangler.toml` 的 `[vars]`，再由 Cloudflare GitHub 部署同步。
+这些变量不能写入 `wrangler.toml` 或 `.dev.vars`，只能在 `/admin` 页面保存到 KV。
 
 部署后也可以直接打开 `/admin`，在“运行变量”区域编辑：
 
@@ -130,10 +130,9 @@ npm run dev
 ```dotenv
 ADMIN_PASSWORD=change-me
 SESSION_SECRET=local-development-secret
-CF_API_TOKEN=optional-token
-DEFAULT_DOMAIN=example.com
-CF_ZONE_ID=optional-zone-id
 ```
+
+启动后打开 `/admin`，在“运行变量”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 和 `IP_SOURCES`。
 
 如果需要绕过 GitHub 连接直接从本地发布：
 

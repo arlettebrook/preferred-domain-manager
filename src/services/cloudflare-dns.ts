@@ -4,7 +4,7 @@ import { DnsRecord, DnsTarget, Env } from "../types";
 import { isIPv4, normalizeDomain } from "../validation";
 
 async function cfFetch<T>(zone: DnsTarget, path: string, init: RequestInit, env: Env, globalApiToken?: string): Promise<T> {
-  const token = globalApiToken || env.CF_API_TOKEN;
+  const token = globalApiToken;
   if (!token) throw new HttpError(400, "没有配置 Cloudflare API Token");
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     ...init,
