@@ -217,7 +217,7 @@ function helpText() {
     "/edit [序号] 编辑记录；唯一记录时可省略序号",
     "/delete [序号] 删除记录；唯一记录时可省略序号",
     "/update 〈IP 或域名〉 仅有一条记录时快捷更新",
-    "点击记录中的等宽文字可复制，点击序号可编辑。",
+    "点击域名或记录内容可复制，点击序号可选择编辑或删除。",
     "",
     "仅允许默认域名和 *.默认域名；仅支持 A、AAAA、CNAME；CNAME 会自动删除同名 A/AAAA。",
   ].join("\n");
@@ -229,23 +229,23 @@ function filteredRecords(records: DnsRecord[], domain: string) {
 }
 
 function recordText(record: DnsRecord) {
-  return `<code>${escapeHtml(record.type)}</code> <code>${escapeHtml(record.name)}</code> <code>${escapeHtml(record.content)}</code>`;
+  return `${escapeHtml(record.type)} <code>${escapeHtml(record.name)}</code> <code>${escapeHtml(record.content)}</code>`;
 }
 
 function recordListText(records: DnsRecord[], page: number, totalPages: number, totalCount: number, domain: string) {
   if (!records.length) return `DNS 记录\n\n<code>${escapeHtml(domain)}</code> 和 <code>*.${escapeHtml(domain)}</code> 当前没有可管理记录。\n\n使用 /add 新增记录。`;
   return [
     `DNS 记录（第 ${page + 1}/${totalPages} 页，共 ${totalCount} 条）`,
-    "点击域名或 IP/CNAME 内容可复制；点击下方序号编辑。",
+    "点击域名或 IP/CNAME 内容可复制；点击序号选择操作。",
     "",
-    records.map((record, index) => `${index + 1}. ${recordText(record)}`).join("\n\n"),
+    records.map((record, index) => `${index + 1}. ${recordText(record)}`).join("\n\n\n"),
   ].join("\n");
 }
 
 function recordListKeyboard(records: DnsRecord[], page: number, totalPages: number): TelegramReplyMarkup {
   const rows: TelegramButton[][] = [];
   records.forEach((record, index) => {
-    rows.push([button(String(index + 1), `edit:${record.id}`)]);
+    rows.push([button(String(index + 1), `record:${record.id}`)]);
   });
   const navigation: TelegramButton[] = [];
   if (page > 0) navigation.push(button("上一页", `list:${page - 1}`));
@@ -339,6 +339,22 @@ async function showList(settings: Settings, env: Env, chatId: number, userId: nu
   else await sendText(settings, chatId, text, markup);
 }
 
+function recordActionKeyboard(record: DnsRecord, page: number): TelegramReplyMarkup {
+  return { inline_keyboard: [
+    [button("编辑内容", `edit:${record.id}`), button("删除记录", `delete:${record.id}`)],
+    [button("返回列表", `list:${page}`)],
+  ] };
+}
+
+async function showRecordActions(settings: Settings, env: Env, callback: TelegramCallbackQuery, id: string) {
+  const target = targetFromSettings(settings);
+  const chatId = callback.message?.chat?.id ?? callback.from.id;
+  const record = await findRecord(target, env, settings, id);
+  if (!record) throw new HttpError(404, "记录不存在或已被删除");
+  const page = await selectionPage(env, chatId, callback.from.id);
+  return editText(settings, callback, `DNS 记录\n${recordText(record)}\n\n请选择操作：`, recordActionKeyboard(record, page));
+}
+
 async function startContentEdit(
   settings: Settings,
   env: Env,
@@ -418,6 +434,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     await sendText(settings, chatId, `新增 ${type} · <code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`, cancelKeyboard());
     return;
   }
+  if (data.startsWith("record:")) return showRecordActions(settings, env, callback, data.slice(7));
   if (data.startsWith("edit-options:")) {
     const target = targetFromSettings(settings);
     const record = await findRecord(target, env, settings, data.slice(13));
