@@ -40,7 +40,8 @@ interface TelegramResponse<T> {
 
 interface TelegramButton {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  copy_text?: { text: string };
 }
 
 interface TelegramReplyMarkup {
@@ -133,11 +134,17 @@ function button(text: string, callbackData: string): TelegramButton {
   return { text, callback_data: callbackData };
 }
 
-function homeKeyboard(): TelegramReplyMarkup {
-  return { inline_keyboard: [
+function copyButton(text: string, value: string): TelegramButton {
+  return { text, copy_text: { text: value.slice(0, 256) } };
+}
+
+function homeKeyboard(settings: Settings): TelegramReplyMarkup {
+  const rows: TelegramButton[][] = [
     [button("📋 DNS 记录", "menu:list"), button("➕ 添加记录", "menu:add")],
     [button("🔄 刷新", "menu:list"), button("❓ 帮助", "menu:help")],
-  ] };
+  ];
+  if (settings.defaultDomain) rows.push([copyButton("📋 复制默认域名", settings.defaultDomain)]);
+  return { inline_keyboard: rows };
 }
 
 function backKeyboard(): TelegramReplyMarkup {
@@ -156,6 +163,7 @@ function helpText() {
     "优选域名管理 Bot",
     "",
     "支持内联键盘，也支持以下命令：",
+    "列表和详情中的复制按钮可直接复制域名、记录内容或记录 ID。",
     "/start 或 /help  打开主菜单",
     "/dns 或 /dns list  查看 DNS 记录",
     "/dns add A <域名> <IPv4>",
@@ -183,10 +191,17 @@ function recordListText(records: DnsRecord[], page: number, totalPages: number, 
 }
 
 function recordListKeyboard(records: DnsRecord[], page: number, totalPages: number): TelegramReplyMarkup {
-  const rows: TelegramButton[][] = records.map((record) => [
-    button(`✏️ ${record.type} ${record.name}`, `edit:${record.id}`),
-    button("🗑️ 删除", `delete:${record.id}`),
-  ]);
+  const rows: TelegramButton[][] = [];
+  for (const record of records) {
+    rows.push([
+      copyButton("📋 域名", record.name),
+      copyButton("📋 记录", `${record.type} ${record.name} ${record.content}`),
+    ]);
+    rows.push([
+      button(`✏️ ${record.type} ${record.name}`, `edit:${record.id}`),
+      button("🗑️ 删除", `delete:${record.id}`),
+    ]);
+  }
   const navigation: TelegramButton[] = [];
   if (page > 0) navigation.push(button("上一页", `list:${page - 1}`));
   if (page + 1 < totalPages) navigation.push(button("下一页", `list:${page + 1}`));
@@ -231,11 +246,13 @@ function cancelKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [[button("✖️ 取消输入", "cancel")]] };
 }
 
-function detailKeyboard(recordId: string): TelegramReplyMarkup {
+function detailKeyboard(record: DnsRecord): TelegramReplyMarkup {
   return { inline_keyboard: [
-    [button("✏️ 修改内容", `edit-content:${recordId}`)],
-    [button("🧩 完整编辑", `edit-options:${recordId}`)],
-    [button("🗑️ 删除记录", `delete:${recordId}`), button("↩️ 返回列表", "list:0")],
+    [copyButton("📋 复制域名", record.name), copyButton("📋 复制内容", record.content)],
+    [copyButton("📋 复制记录", `${record.type} ${record.name} ${record.content}`), copyButton("📋 复制 ID", record.id)],
+    [button("✏️ 修改内容", `edit-content:${record.id}`)],
+    [button("🧩 完整编辑", `edit-options:${record.id}`)],
+    [button("🗑️ 删除记录", `delete:${record.id}`), button("↩️ 返回列表", "list:0")],
   ] };
 }
 
@@ -264,7 +281,7 @@ async function findRecord(target: { domain: string; zoneId: string }, env: Env, 
 }
 
 async function showHome(settings: Settings, chatId: number) {
-  await sendText(settings, chatId, homeText(settings), homeKeyboard());
+  await sendText(settings, chatId, homeText(settings), homeKeyboard(settings));
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, page: number, callback?: TelegramCallbackQuery) {
@@ -283,7 +300,7 @@ async function showRecordDetail(settings: Settings, env: Env, callback: Telegram
   const target = targetFromSettings(settings);
   const record = await findRecord(target, env, settings, id);
   if (!record) throw new HttpError(404, "记录不存在或已被删除");
-  await editText(settings, callback, `DNS 记录详情\n\n${recordText(record)}\n\nID：${record.id}`, detailKeyboard(record.id));
+  await editText(settings, callback, `DNS 记录详情\n\n${recordText(record)}\n\nID：${record.id}`, detailKeyboard(record));
 }
 
 async function handleCallback(settings: Settings, env: Env, callback: TelegramCallbackQuery) {
@@ -293,7 +310,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
 
   if (data === "menu:home") {
     await clearPending(env, chatId, callback.from.id);
-    return editText(settings, callback, homeText(settings), homeKeyboard());
+    return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
   if (data === "menu:help") return editText(settings, callback, helpText(), backKeyboard());
   if (data === "menu:list") return showList(settings, env, chatId, 0, callback);
@@ -304,7 +321,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   }
   if (data === "cancel") {
     await clearPending(env, chatId, callback.from.id);
-    return editText(settings, callback, homeText(settings), homeKeyboard());
+    return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
   if (data.startsWith("add:type:")) {
     const type = recordType(data.slice(9));
