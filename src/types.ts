@@ -34,6 +34,8 @@ export interface DnsRecord {
   comment?: string | null;
   tags?: string[];
   ttl?: number;
+  priority?: number | null;
+  data?: Record<string, unknown>;
 }
 
 export interface SourceResult {

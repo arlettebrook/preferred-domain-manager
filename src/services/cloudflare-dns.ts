@@ -25,6 +25,42 @@ async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: st
   return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
 }
 
+function validateRecordInput(input: Partial<DnsRecord>) {
+  const allowedTypes = new Set(["A", "AAAA", "CNAME", "TXT", "MX", "NS", "CAA", "SRV", "URI"]);
+  const type = String(input.type ?? "").toUpperCase();
+  const name = String(input.name ?? "").trim().toLowerCase();
+  const content = String(input.content ?? "").trim();
+  if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
+  if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
+  const ttl = input.ttl === undefined || input.ttl === null ? 1 : Number(input.ttl);
+  if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) throw new HttpError(400, "TTL 必须是 1 到 86400 的整数");
+  return { type, name, content, ttl, proxied: input.proxied === true, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
+}
+
+export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
+  const records: DnsRecord[] = [];
+  for (let page = 1; page <= 100; page++) {
+    const pageRecords = await cfFetch<DnsRecord[]>(zone, `/zones/${zone.zoneId}/dns_records?per_page=100&page=${page}`, {}, env, globalApiToken);
+    records.push(...(pageRecords ?? []));
+    if (pageRecords.length < 100) break;
+  }
+  return records.sort((left, right) => left.name.localeCompare(right.name) || left.type.localeCompare(right.type) || left.content.localeCompare(right.content));
+}
+
+export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
+  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validateRecordInput(input)) }, env, globalApiToken);
+}
+
+export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
+  if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
+  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(validateRecordInput(input)) }, env, globalApiToken);
+}
+
+export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
+  if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
+  await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
+}
+
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");

@@ -161,6 +161,12 @@ npm run deploy
 登录后可调用：
 
 - `GET /api/config` / `PUT /api/config`：读取/保存默认域名、Zone、来源和手动 IP。
+- `GET /api/dns/records`：读取默认 Zone 的全部 DNS 记录。
+- `POST /api/dns/records`：新建 DNS 记录。
+- `PUT /api/dns/records/:id`：编辑 DNS 记录。
+- `DELETE /api/dns/records/:id`：删除 DNS 记录。
 - `POST /api/ips/preview`：抓取来源、合并并执行 TCP 443 检测。
 - `POST /api/sync`：执行默认 Zone 的 DNS Diff Update。
 - `POST /api/auth/logout`：注销会话。
+
+后台的“运行变量”区域提供独立的“保存运行变量”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。

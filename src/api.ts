@@ -3,6 +3,7 @@ import { createSession, expiredCookie, isValidSession, sessionCookie } from "./s
 import { collectPreferredIps } from "./services/ip-sources";
 import { getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
+import { createDnsRecord, deleteDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { Env, IpSource, Settings } from "./types";
 import { dedupeIps, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
@@ -50,6 +51,24 @@ export async function handleApi(request: Request, env: Env) {
   }
   if (url.pathname === "/api/auth/logout" && request.method === "POST") return json({ ok: true }, 200, { "set-cookie": expiredCookie() });
   await requireAuth(request, env);
+
+  const dnsMatch = url.pathname.match(/^\/api\/dns\/records(?:\/([^/]+))?$/);
+  if (dnsMatch) {
+    const settings = await getSettings(env);
+    const target = settings.defaultDomain && settings.cfZoneId ? { domain: settings.defaultDomain, zoneId: settings.cfZoneId } : undefined;
+    if (!target) throw new HttpError(400, "请先在设置中保存 DEFAULT_DOMAIN 和 CF_ZONE_ID");
+    if (request.method === "GET" && !dnsMatch[1]) return json({ records: await listDnsRecords(target, env, settings.cfApiToken), domain: target.domain }, 200, { "cache-control": "no-store" });
+    if (request.method === "POST" && !dnsMatch[1]) {
+      const body = await readJson<Record<string, unknown>>(request);
+      return json({ record: await createDnsRecord(target, body, env, settings.cfApiToken) }, 201);
+    }
+    if (request.method === "PUT" && dnsMatch[1]) {
+      const body = await readJson<Record<string, unknown>>(request);
+      return json({ record: await updateDnsRecord(target, dnsMatch[1], body, env, settings.cfApiToken) });
+    }
+    if (request.method === "DELETE" && dnsMatch[1]) { await deleteDnsRecord(target, dnsMatch[1], env, settings.cfApiToken); return json({ ok: true }); }
+    throw new HttpError(405, "不支持的 DNS 操作");
+  }
 
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
   if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
