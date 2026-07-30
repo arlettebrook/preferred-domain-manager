@@ -22,6 +22,9 @@ export interface Settings {
   cfApiToken?: string;
   defaultDomain?: string;
   cfZoneId?: string;
+  telegramBotToken?: string;
+  telegramAllowedUserIds?: string[];
+  telegramWebhookSecret?: string;
   updatedAt: string;
 }
 

@@ -5,6 +5,7 @@ import { runSync } from "./services/sync";
 import { adminPage, landingPage } from "./ui";
 import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
+import { handleTelegramWebhook } from "./services/telegram";
 
 export { SyncLock };
 
@@ -12,6 +13,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       const url = new URL(request.url);
+      if (url.pathname === "/telegram/webhook" && request.method === "POST") return await handleTelegramWebhook(request, env);
       if (url.pathname.startsWith("/api/")) return await handleApi(request, env);
       if (url.pathname === "/admin" || url.pathname === "/admin/") return html(adminPage());
       return html(landingPage(url.host));
@@ -26,4 +28,3 @@ export default {
     ctx.waitUntil(runSync(env).catch((error) => console.error("scheduled sync failed", error)));
   },
 };
-

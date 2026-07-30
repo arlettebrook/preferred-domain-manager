@@ -1,7 +1,7 @@
 import { DNS_TTL, MANAGED_COMMENT } from "../config";
 import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
-import { isIPv4, normalizeDomain } from "../validation";
+import { isIPv4, isIPv6, normalizeDomain } from "../validation";
 
 async function cfFetch<T>(zone: DnsTarget, path: string, init: RequestInit, env: Env, globalApiToken?: string): Promise<T> {
   const token = globalApiToken;
@@ -35,7 +35,15 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
   const allowedNames = new Set([domain, `*.${domain}`]);
   if (!domain || !allowedNames.has(name)) throw new HttpError(400, `记录名称只能是 ${domain} 或 *.${domain}`);
   if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
-  return { type, name, content, ttl: DNS_TTL, proxied: input.proxied === true, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
+  if (type === "A" && !isIPv4(content)) throw new HttpError(400, "A 记录内容必须是有效的 IPv4 地址");
+  if (type === "AAAA" && !isIPv6(content)) throw new HttpError(400, "AAAA 记录内容必须是有效的 IPv6 地址");
+  if (type === "CNAME" && /\s/.test(content)) throw new HttpError(400, "CNAME 目标不能包含空格");
+  return { type, name, content, ttl: DNS_TTL, proxied: false, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
+}
+
+export function isEditableDnsRecord(zone: DnsTarget, record: DnsRecord) {
+  const domain = normalizeDomain(zone.domain);
+  return new Set([domain, `*.${domain}`]).has(record.name.toLowerCase()) && ["A", "AAAA", "CNAME"].includes(record.type);
 }
 
 async function removeAddressRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
@@ -75,10 +83,11 @@ export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>
 
 export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
+  const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
+  if (!current) throw new HttpError(404, "DNS 记录不存在");
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑默认域名或泛域名的 A、AAAA、CNAME 记录");
   const validated = validateRecordInput(zone, input);
   if (validated.type === "CNAME") {
-    const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
-    if (!current) throw new HttpError(404, "DNS 记录不存在");
     const currentIsAddress = current.type === "A" || current.type === "AAAA";
     await removeAddressRecords(zone, validated.name, env, globalApiToken, currentIsAddress ? undefined : id);
     if (currentIsAddress) {
@@ -93,6 +102,9 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
 
 export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
+  const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
+  if (!current) throw new HttpError(404, "DNS 记录不存在");
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除默认域名或泛域名的 A、AAAA、CNAME 记录");
   await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
 }
 

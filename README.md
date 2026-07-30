@@ -14,6 +14,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式。
+- Telegram Bot DNS 管理：白名单用户可查看、新建、修改和删除 DNS 记录，并通过 Webhook 接收命令。
 
 ## 项目结构
 
@@ -28,6 +29,7 @@ src/
 ├─ services/settings.ts          KV 配置读写
 ├─ services/ip-sources.ts        多来源 IP、去重和 TCP 443 探测
 ├─ services/cloudflare-dns.ts    Cloudflare DNS Diff Update
+├─ services/telegram.ts          Telegram Webhook 与 DNS Bot 命令
 ├─ services/sync.ts              同步编排和 Durable Object 锁
 └─ durable-objects/sync-lock.ts  原子同步锁
 ```
@@ -83,19 +85,10 @@ Secrets：
 | --- | --- |
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
-| `CF_API_TOKEN` | Worker 运行时调用 Cloudflare DNS API 的 Token |
 
-`CF_API_TOKEN` 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
+Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Workers Variables/Secrets；本项目会在 `/admin` 的“全局设置”中保存到 KV。Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
 
-Variables：
-
-```text
-DEFAULT_DOMAIN=example.com
-CF_ZONE_ID=你的 Zone ID
-IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
-```
-
-这些变量不能写入 `wrangler.toml` 或 `.dev.vars`，只能在 `/admin` 页面保存到 KV。
+不要把 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 或 `IP_SOURCES` 写入仓库、`wrangler.toml` 或 `.dev.vars`；这些值只能在 `/admin` 页面保存到 KV。
 
 部署后也可以直接打开 `/admin`，在“全局设置”区域编辑：
 
@@ -103,8 +96,33 @@ IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
 - `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
 - `CF_ZONE_ID`：Cloudflare Zone ID。
 - `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
+- Telegram Bot Token、Webhook Secret 和 Telegram 用户 ID 白名单：在“Telegram Bot”区域编辑。Token 和 Secret 留空表示保持原值。
 
 面板保存的配置写入 KV，并优先于 Wrangler 初始变量。`DEFAULT_DOMAIN + CF_ZONE_ID` 始终作为同步目标。全局 Token 只返回“已配置”状态，不会通过管理 API 返回明文。
+
+### Telegram Bot DNS 管理
+
+1. 在 Telegram 中联系 `@BotFather`，使用 `/newbot` 创建 Bot 并复制 Bot Token。
+2. 获取自己的 Telegram 数字用户 ID（可使用可信的 ID 查询 Bot），不要填写用户名或群组名称。
+3. 登录 `/admin` → “全局设置” → “Telegram Bot”，填写 Bot Token、随机 Webhook Secret 和允许操作的用户 ID，每行一个。
+4. 点击“保存 Telegram 设置”，再点击“测试 Bot”确认 Token 有效。
+5. 点击“设置 Webhook”。系统会自动使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。
+
+Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定义域名，请确保该域名的 Worker 路由已经生效。需要停用时点击“删除 Webhook”。
+
+支持的命令：
+
+```text
+/start 或 /help
+/dns 或 /dns list
+/dns add A example.com 1.1.1.1
+/dns add AAAA '*.example.com' 2606:4700:4700::1111
+/dns add CNAME example.com target.example.net
+/dns update <记录ID> <类型> <域名> <内容>
+/dns delete <记录ID>
+```
+
+Bot 与管理面板共用 DNS 规则：只能操作默认域名和 `*.默认域名`，只允许 A、AAAA、CNAME；CNAME 保存时会自动删除同名 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
 
 ### 4. 配置 Worker Routes
 
@@ -134,7 +152,7 @@ ADMIN_PASSWORD=change-me
 SESSION_SECRET=local-development-secret
 ```
 
-启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`；IP 来源在仪表盘中配置。
+启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`；IP 来源在仪表盘中配置。Telegram Bot 需要在“全局设置”中配置。
 
 如果需要绕过 GitHub 连接直接从本地发布：
 
@@ -170,5 +188,8 @@ npm run deploy
 - `POST /api/ips/preview`：抓取来源、合并并执行 TCP 443 检测。
 - `POST /api/sync`：执行默认 Zone 的 DNS Diff Update。
 - `POST /api/auth/logout`：注销会话。
+- `POST /api/telegram/test`：测试 Telegram Bot Token。
+- `POST /api/telegram/webhook` / `DELETE /api/telegram/webhook`：设置或删除 Telegram Webhook。
+- `POST /telegram/webhook`：Telegram 回调入口，由 Telegram 调用，不需要管理员 Cookie。
 
 后台的“全局设置”区域提供独立的“保存设置”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除。DNS 记录名称限定为默认域名和泛域名，类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
