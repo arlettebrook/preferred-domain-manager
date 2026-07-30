@@ -4,11 +4,11 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 
 ## 功能
 
-- `/` 提供首页，`/admin` 提供管理后台；管理员会话使用签名的 `HttpOnly` Cookie。
-- 多 Zone 管理：每个 Zone 配置独立的域名、Zone ID 和可选 API Token。
-- 多来源 IP 合并、去重、IPv4/IPv6 过滤；支持手动 IP。
+- `/` 首页、`/admin` 管理后台，管理员会话使用签名的 `HttpOnly` Cookie。
+- 多 Zone 管理，每个 Zone 可配置独立的域名、Zone ID 和 API Token。
+- 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
-- DNS Diff Update：只创建新增记录、删除过期记录、保留未变化记录。
+- DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式、OpenAPI JSON 文档：`/api/openapi.json`。
@@ -30,59 +30,112 @@ src/
 └─ durable-objects/sync-lock.ts  原子同步锁
 ```
 
-## 部署
+## 通过 Cloudflare Workers 页面连接 GitHub 部署
 
-需要 Node.js 18+ 和 Wrangler。
+本项目不使用 GitHub Actions 发布。推荐在 Cloudflare Dashboard 的 Workers & Pages 页面直接连接 GitHub 仓库，由 Cloudflare Workers Builds 负责构建和部署。
+
+### 1. 准备 KV Namespace
+
+可以使用 Wrangler 创建：
 
 ```bash
-npm install
-npx wrangler login
 npx wrangler kv namespace create PDM_KV
 ```
 
-把命令返回的 KV namespace id 填到 `wrangler.toml` 的 `id`。然后设置必需的 Secret：
-
-```bash
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler secret put SESSION_SECRET
-```
-
-`SESSION_SECRET` 应使用随机长字符串。可以设置一个全局 Cloudflare API Token，也可以在后台为每个 Zone 单独填写 Token：
-
-```bash
-npx wrangler secret put CF_API_TOKEN
-```
-
-可选的初始单 Zone 配置写在 `wrangler.toml` 的 `[vars]`：
+或者在 Cloudflare Dashboard → Storage & databases → KV 中创建 `PDM_KV`。将返回的 namespace ID 填入 [wrangler.toml](wrangler.toml)：
 
 ```toml
-DEFAULT_DOMAIN = "example.com"
-CF_ZONE_ID = "你的 Zone ID"
-IP_SOURCES = "https://source-one.example/ips,https://source-two.example/ips"
+[[kv_namespaces]]
+binding = "PDM_KV"
+id = "你的 KV namespace ID"
 ```
 
-部署：
+不要保留 `replace-with-your-kv-namespace-id` 占位符。
+
+### 2. 在 Cloudflare 连接 GitHub
+
+进入 Cloudflare Dashboard → Workers & Pages → Create application → Workers → Connect to Git，完成 GitHub 授权后：
+
+1. 选择 GitHub 仓库 `preferred-domain-manager`。
+2. 生产分支选择 `main`。
+3. Root directory 保持 `/`。
+4. Build command 填写 `npm run build`。
+5. Deploy command 填写 `npm run deploy`。
+6. 保存并部署。
+
+`npm run build` 会执行 TypeScript 类型检查；`npm run deploy` 会由 Cloudflare Workers Builds 调用 Wrangler 发布 Worker。后续推送到 `main` 时，Cloudflare 会按照该连接配置进行构建和发布，不需要 GitHub Actions，也不需要把 Cloudflare API Token 放进 GitHub Secrets。
+
+如果 Cloudflare 的构建设置没有自动安装 npm 依赖，可将 Build command 改为：
 
 ```bash
-npx wrangler deploy
+npm ci && npm run build
 ```
 
-## Cloudflare 路由和 DNS
+### 3. 配置 Worker Secrets 和变量
 
-Worker 发布后，在 Worker Routes 中添加：
+部署成功后，进入 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Variables and Secrets，添加：
+
+Secrets：
+
+| 名称 | 说明 |
+| --- | --- |
+| `ADMIN_PASSWORD` | 管理后台登录密码 |
+| `SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
+| `CF_API_TOKEN` | Worker 运行时调用 Cloudflare DNS API 的 Token |
+
+`CF_API_TOKEN` 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。如果每个 Zone 都在 `/admin` 中配置了独立 Token，可以不设置全局 Token。
+
+Variables：
+
+```text
+DEFAULT_DOMAIN=example.com
+CF_ZONE_ID=你的 Zone ID
+IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
+```
+
+这些变量也可以写入 `wrangler.toml` 的 `[vars]`，再由 Cloudflare GitHub 部署同步。
+
+### 4. 配置 Worker Routes
+
+Worker 发布后，在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Domains & Routes 中添加：
 
 ```text
 example.com/*
 *.example.com/*
 ```
 
-根域名与泛域名都必须经过 Worker。Cloudflare Zone 必须处于激活状态，但优选 DNS 记录本身必须保持 DNS only（灰云）；后台同步会强制新建记录为 `proxied: false`，并会把由本管理器维护且误开代理的记录改回灰云。
+根域名与泛域名都必须经过 Worker。Cloudflare Zone 必须处于激活状态，但优选 DNS 记录本身必须保持 DNS only（灰云）。同步逻辑会强制新建记录为 `proxied: false`，并把由本管理器维护且误开代理的记录改回灰云。
 
-Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 与 `DNS:Edit` 权限。建议为每个 Zone 使用最小权限 Token。
+## 本地开发与手动备用部署
+
+需要 Node.js 18+：
+
+```bash
+npm ci
+npx wrangler login
+npm run dev
+```
+
+在 `.dev.vars` 中填写：
+
+```dotenv
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=local-development-secret
+CF_API_TOKEN=optional-token
+DEFAULT_DOMAIN=example.com
+CF_ZONE_ID=optional-zone-id
+```
+
+如果需要绕过 GitHub 连接直接从本地发布：
+
+```bash
+npm run check
+npm run deploy
+```
 
 ## IP 来源格式
 
-来源接口可以返回纯文本，也可以返回 JSON。程序会递归提取其中的 IPv4/IPv6 字符串，例如：
+来源接口可以返回纯文本，也可以返回 JSON。程序会递归提取其中的 IPv4/IPv6 字符串：
 
 ```text
 1.1.1.1
@@ -95,26 +148,6 @@ Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 与 `DNS:Edit` 权�
 {"data":["1.1.1.1", "2606:4700:4700::1111"]}
 ```
 
-## 本地开发
-
-在 `.dev.vars` 中填写：
-
-```dotenv
-ADMIN_PASSWORD=change-me
-SESSION_SECRET=local-development-secret
-CF_API_TOKEN=optional-token
-DEFAULT_DOMAIN=example.com
-CF_ZONE_ID=optional-zone-id
-```
-
-再运行：
-
-```bash
-npm run dev
-```
-
-本地开发仍建议使用测试 Zone。TCP 443 探测依赖 Workers 的 `cloudflare:sockets` 能力；在本地模拟器中不可用时，预览/同步会把无法连接的地址过滤掉。
-
 ## API 摘要
 
 登录后可调用：
@@ -125,69 +158,3 @@ npm run dev
 - `POST /api/auth/logout`：注销会话。
 
 完整 OpenAPI 文档见 `/api/openapi.json`。
-
-## GitHub 自动部署到 Cloudflare
-
-仓库已内置两个 GitHub Actions：
-
-- `.github/workflows/ci.yml`：Pull Request 和非 `main` 分支执行 `npm ci`、类型检查及 Wrangler dry-run。
-- `.github/workflows/deploy.yml`：推送到 `main` 或手动运行时，自动部署到 Cloudflare Workers。
-
-### 1. 创建 Cloudflare API Token
-
-在 Cloudflare Dashboard → My Profile → API Tokens 创建 Token，至少授予：
-
-- Account → Workers Scripts → Edit
-- Account → Workers KV Storage → Edit
-- Account → Account Settings → Read（Wrangler 通常需要读取账户信息）
-
-如果希望 Worker 能同步 DNS，Token 还需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit`。建议使用专用 Token，并限制到目标账户/Zone。
-
-### 2. 创建 KV Namespace
-
-本地执行：
-
-```bash
-npx wrangler kv namespace create PDM_KV
-```
-
-记录返回的 namespace ID。不要提交真实的 API Token；KV ID 可以放入 GitHub Secret，由部署工作流注入。
-
-### 3. 配置 GitHub Secrets
-
-在 GitHub 仓库 Settings → Secrets and variables → Actions → New repository secret 添加：
-
-| Secret | 内容 |
-| --- | --- |
-| `CLOUDFLARE_API_TOKEN` | 上一步创建的 Cloudflare API Token |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID |
-| `PDM_KV_NAMESPACE_ID` | `wrangler kv namespace create PDM_KV` 返回的 ID |
-| `PDM_ADMIN_PASSWORD` | 管理后台登录密码 |
-| `PDM_SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
-| `PDM_CF_API_TOKEN` | Worker 运行时调用 DNS API 的 Token，可与部署 Token 相同 |
-
-其中 `CLOUDFLARE_ACCOUNT_ID` 可在 Cloudflare Dashboard 的 Workers & Pages 概览或账户 URL 中找到。
-
-### 4. 配置 Worker 变量
-
-部署工作流会把 `PDM_ADMIN_PASSWORD`、`PDM_SESSION_SECRET` 和可选的 `PDM_CF_API_TOKEN` 写入 Worker Secret，不会把运行时密码写入仓库。也可以在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Variables and Secrets 中手动设置：
-
-```bash
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler secret put SESSION_SECRET
-npx wrangler secret put CF_API_TOKEN
-```
-
-也可以在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Variables and Secrets 中设置。`DEFAULT_DOMAIN`、`CF_ZONE_ID`、`IP_SOURCES` 等非敏感初始配置可放在 `wrangler.toml` 的 `[vars]`，然后提交到 GitHub。
-
-### 5. 触发部署
-
-提交并推送到 `main`：
-
-```bash
-git add .
-git commit -m "deploy worker"
-git push origin main
-```
-
-也可以在 GitHub Actions 页面手动运行 `Deploy to Cloudflare Workers`。工作流会在部署前将 `PDM_KV_NAMESPACE_ID` 注入 `wrangler.toml`，不会修改仓库中的占位符文件。
