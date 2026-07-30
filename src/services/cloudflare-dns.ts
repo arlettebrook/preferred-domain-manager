@@ -1,4 +1,4 @@
-import { MANAGED_COMMENT } from "../config";
+import { DNS_TTL, MANAGED_COMMENT } from "../config";
 import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
 import { isIPv4, normalizeDomain } from "../validation";
@@ -35,9 +35,7 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
   const allowedNames = new Set([domain, `*.${domain}`]);
   if (!domain || !allowedNames.has(name)) throw new HttpError(400, `记录名称只能是 ${domain} 或 *.${domain}`);
   if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
-  const ttl = input.ttl === undefined || input.ttl === null ? 1 : Number(input.ttl);
-  if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) throw new HttpError(400, "TTL 必须是 1 到 86400 的整数");
-  return { type, name, content, ttl, proxied: input.proxied === true, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
+  return { type, name, content, ttl: DNS_TTL, proxied: input.proxied === true, ...(input.priority == null ? {} : { priority: Number(input.priority) }) };
 }
 
 async function removeAddressRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
@@ -47,6 +45,15 @@ async function removeAddressRecords(zone: DnsTarget, name: string, env: Env, glo
     await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
   }
   return addressRecords.length;
+}
+
+async function removeCnameRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
+  const records = await listDnsRecords(zone, env, globalApiToken);
+  const cnameRecords = records.filter((record) => record.name === name && record.type === "CNAME" && record.id !== exceptId);
+  for (const record of cnameRecords) {
+    await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
+  }
+  return cnameRecords.length;
 }
 
 export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
@@ -62,6 +69,7 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   const validated = validateRecordInput(zone, input);
   if (validated.type === "CNAME") await removeAddressRecords(zone, validated.name, env, globalApiToken);
+  else await removeCnameRecords(zone, validated.name, env, globalApiToken);
   return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
 }
 
@@ -77,6 +85,8 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
       await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
       return createDnsRecord(zone, validated, env, globalApiToken);
     }
+  } else {
+    await removeCnameRecords(zone, validated.name, env, globalApiToken, id);
   }
   return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(validated) }, env, globalApiToken);
 }
@@ -116,7 +126,7 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
       const type = isIPv4(ip) ? "A" : "AAAA";
       const key = `${name}:${type}:${ip}`;
       if (seen.has(key)) continue;
-      await cfFetch(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify({ type, name, content: ip, ttl: 60, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] }) }, env, globalApiToken);
+      await cfFetch(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify({ type, name, content: ip, ttl: DNS_TTL, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] }) }, env, globalApiToken);
       seen.add(key);
       created++;
     }
