@@ -9,12 +9,9 @@ export interface Env {
   IP_SOURCES?: string;
 }
 
-export interface ZoneConfig {
-  id: string;
-  name: string;
+export interface DnsTarget {
   zoneId: string;
   domain: string;
-  apiToken?: string;
 }
 
 export interface IpSource {
@@ -24,9 +21,11 @@ export interface IpSource {
 }
 
 export interface Settings {
-  zones: ZoneConfig[];
   ipSources: IpSource[];
   manualIps: string[];
+  cfApiToken?: string;
+  defaultDomain?: string;
+  cfZoneId?: string;
   updatedAt: string;
 }
 
@@ -52,4 +51,3 @@ export interface CollectedIps {
   reachable: string[];
   sources: Array<{ id: string; url: string; count: number; error?: string }>;
 }
-

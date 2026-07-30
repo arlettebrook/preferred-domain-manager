@@ -1,10 +1,9 @@
-import { openApiDocument } from "./openapi";
 import { SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { collectPreferredIps } from "./services/ip-sources";
 import { getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
-import { Env, IpSource, ZoneConfig } from "./types";
+import { Env, IpSource } from "./types";
 import { dedupeIps, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -15,30 +14,24 @@ async function requireAuth(request: Request, env: Env) {
 
 async function saveConfig(request: Request, env: Env) {
   const input = await readJson<{
-    zones?: Array<Partial<ZoneConfig> & { hasToken?: boolean }>;
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
+    defaultDomain?: string;
+    cfZoneId?: string;
+    cfApiToken?: string;
   }>(request);
   const previous = await getSettings(env);
-  const zones = (input.zones ?? []).map((zone, index) => {
-    const old = previous.zones.find((item) => item.id === zone.id);
-    return {
-      id: String(zone.id || crypto.randomUUID()),
-      name: String(zone.name || `Zone ${index + 1}`).trim(),
-      zoneId: String(zone.zoneId || "").trim(),
-      domain: normalizeDomain(String(zone.domain || "")),
-      apiToken: typeof zone.apiToken === "string" && zone.apiToken ? zone.apiToken : old?.apiToken,
-    };
-  }).filter((zone) => zone.domain && zone.zoneId);
   const ipSources = (input.ipSources ?? []).map((source) => ({
     id: String(source.id || crypto.randomUUID()),
     url: String(source.url || "").trim(),
     enabled: source.enabled !== false,
   })).filter((source) => /^https?:\/\//i.test(source.url));
   const settings = {
-    zones,
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
+    defaultDomain: normalizeDomain(String(input.defaultDomain || "")),
+    cfZoneId: String(input.cfZoneId || "").trim(),
+    cfApiToken: typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken,
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
@@ -54,7 +47,6 @@ export async function handleApi(request: Request, env: Env) {
     return json({ ok: true }, 200, { "set-cookie": sessionCookie(token, request) });
   }
   if (url.pathname === "/api/auth/logout" && request.method === "POST") return json({ ok: true }, 200, { "set-cookie": expiredCookie() });
-  if (url.pathname === "/api/openapi.json") return json(openApiDocument);
   await requireAuth(request, env);
 
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
@@ -63,8 +55,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {
-      const body = await readJson<{ zoneId?: string }>(request);
-      return json({ ok: true, ...(await runSync(env, body.zoneId)) });
+      return json({ ok: true, ...(await runSync(env)) });
     } catch (error) {
       if (error instanceof LockBusyError) return json({ ok: false, error: error.message }, 409);
       throw error;

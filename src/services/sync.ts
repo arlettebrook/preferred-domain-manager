@@ -1,7 +1,7 @@
 import { SYNC_LOCK_NAME } from "../config";
 import { LockBusyError, HttpError } from "../errors";
 import { collectPreferredIps } from "./ip-sources";
-import { getSettings } from "./settings";
+import { effectiveTarget, getSettings } from "./settings";
 import { Env } from "../types";
 import { syncZone } from "./cloudflare-dns";
 
@@ -16,16 +16,14 @@ export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise
   }
 }
 
-export async function runSync(env: Env, zoneId?: string) {
+export async function runSync(env: Env) {
   return withSyncLock(env, async () => {
     const settings = await getSettings(env);
-    const zones = zoneId ? settings.zones.filter((zone) => zone.id === zoneId) : settings.zones;
-    if (!zones.length) throw new HttpError(400, "没有可同步的 Zone");
+    const target = effectiveTarget(settings);
+    if (!target) throw new HttpError(400, "没有配置默认域名或 Zone ID");
     const collected = await collectPreferredIps(settings, true);
     if (!collected.reachable.length) throw new HttpError(502, "没有通过 TCP 443 检测的优选 IP，已停止同步以保护现有 DNS 记录");
-    const results = [];
-    for (const zone of zones) results.push(await syncZone(zone, collected.reachable, env));
-    return { at: new Date().toISOString(), candidates: collected.merged.length, reachable: collected.reachable, sources: collected.sources, results };
+    const result = await syncZone(target, collected.reachable, env, settings.cfApiToken);
+    return { at: new Date().toISOString(), candidates: collected.merged.length, reachable: collected.reachable, sources: collected.sources, result };
   });
 }
-

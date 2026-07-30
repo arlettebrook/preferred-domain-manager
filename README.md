@@ -1,17 +1,17 @@
 # 优选域名管理面板
 
-Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并去重并检测 TCP 443，只把通过检测的 IPv4/IPv6 以 DNS only（灰云）记录同步到一个或多个 Cloudflare Zone，同时覆盖根域名和泛解析。
+Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并去重并检测 TCP 443，只把通过检测的 IPv4/IPv6 以 DNS only（灰云）记录同步到一个默认 Cloudflare Zone，同时覆盖根域名和泛解析。
 
 ## 功能
 
 - `/` 首页、`/admin` 管理后台，管理员会话使用签名的 `HttpOnly` Cookie。
-- 多 Zone 管理，每个 Zone 可配置独立的域名、Zone ID 和 API Token。
+- 单 Zone 管理，通过 `DEFAULT_DOMAIN`、`CF_ZONE_ID` 和 `CF_API_TOKEN` 管理目标域名。
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
-- 暗黑模式、OpenAPI JSON 文档：`/api/openapi.json`。
+- 暗黑模式。
 
 ## 项目结构
 
@@ -83,7 +83,7 @@ Secrets：
 | `SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
 | `CF_API_TOKEN` | Worker 运行时调用 Cloudflare DNS API 的 Token |
 
-`CF_API_TOKEN` 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。如果每个 Zone 都在 `/admin` 中配置了独立 Token，可以不设置全局 Token。
+`CF_API_TOKEN` 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
 
 Variables：
 
@@ -94,6 +94,15 @@ IP_SOURCES=https://source-one.example/ips,https://source-two.example/ips
 ```
 
 这些变量也可以写入 `wrangler.toml` 的 `[vars]`，再由 Cloudflare GitHub 部署同步。
+
+部署后也可以直接打开 `/admin`，在“运行变量”区域编辑：
+
+- `CF_API_TOKEN`：全局 Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
+- `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
+- `CF_ZONE_ID`：默认 Zone ID。
+- `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
+
+面板保存的配置写入 KV，并优先于 Wrangler 初始变量。`DEFAULT_DOMAIN + CF_ZONE_ID` 始终作为同步目标。全局 Token 只返回“已配置”状态，不会通过管理 API 返回明文。
 
 ### 4. 配置 Worker Routes
 
@@ -152,9 +161,7 @@ npm run deploy
 
 登录后可调用：
 
-- `GET /api/config` / `PUT /api/config`：读取/保存多 Zone、来源和手动 IP。
+- `GET /api/config` / `PUT /api/config`：读取/保存默认域名、Zone、来源和手动 IP。
 - `POST /api/ips/preview`：抓取来源、合并并执行 TCP 443 检测。
-- `POST /api/sync`：执行 Diff Update，可传 `{ "zoneId": "..." }` 只同步一个 Zone。
+- `POST /api/sync`：执行默认 Zone 的 DNS Diff Update。
 - `POST /api/auth/logout`：注销会话。
-
-完整 OpenAPI 文档见 `/api/openapi.json`。
