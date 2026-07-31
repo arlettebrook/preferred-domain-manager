@@ -90,7 +90,7 @@ export function publicSettings(settings: Settings) {
     adminPath: effectiveAdminPath(settings),
     defaultDomain: settings.defaultDomain ?? "",
     cfZoneId: settings.cfZoneId ?? "",
-    hasCfApiToken: Boolean(settings.cfApiToken),
+    hasCfApiToken: Boolean(effectiveApiToken(settings)),
     telegramAllowedUserIds: settings.telegramAllowedUserIds ?? [],
     hasTelegramBotToken: Boolean(settings.telegramBotToken),
     hasTelegramWebhookSecret: Boolean(settings.telegramWebhookSecret),
