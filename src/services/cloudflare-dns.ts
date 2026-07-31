@@ -15,13 +15,8 @@ async function cfFetch<T>(zone: DnsTarget, path: string, init: RequestInit, env:
   return body.result;
 }
 
-async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
-  const records: DnsRecord[] = [];
-  for (let page = 1; page <= 100; page++) {
-    const pageRecords = await cfFetch<DnsRecord[]>(zone, `/zones/${zone.zoneId}/dns_records?per_page=100&page=${page}`, {}, env, globalApiToken);
-    records.push(...(pageRecords ?? []));
-    if (pageRecords.length < 100) break;
-  }
+async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: string, source?: DnsRecord[]) {
+  const records = source ?? await listDnsRecords(zone, env, globalApiToken);
   return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
 }
 
@@ -146,7 +141,7 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
   const allRecords = await listDnsRecords(zone, env, globalApiToken);
   const hasPairedCname = allRecords.some((record) => names.has(record.name) && record.type === "CNAME");
   const namesToSync = hasPairedCname ? new Set<string>() : names;
-  const existing = (await listManagedRecords(zone, env, globalApiToken)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
+  const existing = (await listManagedRecords(zone, env, globalApiToken, allRecords)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
   let created = 0, deleted = 0, kept = 0, unproxied = 0;
@@ -177,5 +172,5 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
       created++;
     }
   }
-  return { domain, created, deleted, kept, unproxied, total: ips.length * namesToSync.size };
+  return { domain, created, deleted, kept, unproxied, total: ips.length * namesToSync.size, skippedCname: hasPairedCname };
 }

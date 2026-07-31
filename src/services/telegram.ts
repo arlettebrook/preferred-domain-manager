@@ -408,8 +408,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const target = targetFromSettings(settings);
     const name = target.domain;
     await setPending(env, chatId, callback.from.id, { kind: "add", type, name });
-    await sendText(settings, chatId, `新增 ${type} · <code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`, cancelKeyboard());
-    return;
+    return editText(settings, callback, `新增 ${type} · <code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`, cancelKeyboard());
   }
   if (data.startsWith("record:")) return showRecordActions(settings, env, callback, data.slice(7));
   if (data.startsWith("edit-options:")) {
@@ -430,8 +429,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const record = await findRecord(target, env, settings, recordId);
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
     await setPending(env, chatId, callback.from.id, { kind: "edit", type, name: target.domain, recordId, page: await selectionPage(env, chatId, callback.from.id) });
-    await sendText(settings, chatId, `完整编辑 · ${type} <code>${escapeHtml(target.domain)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
-    return;
+    return editText(settings, callback, `完整编辑 · ${type} <code>${escapeHtml(target.domain)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
   }
   if (data.startsWith("edit-content:")) {
     const target = targetFromSettings(settings);
