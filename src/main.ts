@@ -6,8 +6,8 @@ import { adminPage, landingPage } from "./ui";
 import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
 import { handleTelegramWebhook } from "./services/telegram";
-import { getSettings } from "./services/settings";
-import { DEFAULT_ADMIN_PATH, isValidAdminPath, normalizeAdminPath } from "./validation";
+import { effectiveAdminPath, getSettings } from "./services/settings";
+import { DEFAULT_ADMIN_PATH } from "./validation";
 
 export { SyncLock };
 
@@ -18,8 +18,7 @@ export default {
       if (url.pathname === "/telegram/webhook" && request.method === "POST") return await handleTelegramWebhook(request, env);
       if (url.pathname.startsWith("/api/")) return await handleApi(request, env);
       const settings = await getSettings(env);
-      const configuredAdminPath = normalizeAdminPath(settings.adminPath || DEFAULT_ADMIN_PATH);
-      const adminPath = isValidAdminPath(configuredAdminPath) ? configuredAdminPath : DEFAULT_ADMIN_PATH;
+      const adminPath = effectiveAdminPath(settings);
       const requestPath = url.pathname.replace(/\/+$/, "") || "/";
       if (requestPath === adminPath) return html(adminPage());
       if (requestPath === DEFAULT_ADMIN_PATH && adminPath !== DEFAULT_ADMIN_PATH) return Response.redirect(new URL(adminPath, request.url), 302);

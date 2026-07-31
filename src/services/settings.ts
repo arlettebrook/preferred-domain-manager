@@ -2,6 +2,11 @@ import { SETTINGS_KEY } from "../config";
 import { DnsTarget, Env, Settings } from "../types";
 import { DEFAULT_ADMIN_PATH, isValidAdminPath, normalizeAdminPath } from "../validation";
 
+export function effectiveAdminPath(settings: Pick<Settings, "adminPath">) {
+  const normalized = normalizeAdminPath(settings.adminPath || DEFAULT_ADMIN_PATH);
+  return isValidAdminPath(normalized) ? normalized : DEFAULT_ADMIN_PATH;
+}
+
 export function defaultSettings(): Settings {
   return {
     ipSources: [],
@@ -23,7 +28,7 @@ export async function getSettings(env: Env): Promise<Settings> {
     const legacyZone = (saved as Settings & { zones?: Array<{ domain?: string; zoneId?: string; apiToken?: string }> }).zones?.[0];
     return {
       ...saved,
-      adminPath: saved.adminPath && isValidAdminPath(normalizeAdminPath(saved.adminPath)) ? normalizeAdminPath(saved.adminPath) : DEFAULT_ADMIN_PATH,
+      adminPath: effectiveAdminPath(saved),
       defaultDomain: saved.defaultDomain ?? legacyZone?.domain ?? "",
       cfZoneId: saved.cfZoneId ?? legacyZone?.zoneId ?? "",
       cfApiToken: saved.cfApiToken ?? legacyZone?.apiToken,
@@ -39,7 +44,7 @@ export function publicSettings(settings: Settings) {
   return {
     ipSources: settings.ipSources,
     manualIps: settings.manualIps,
-    adminPath: settings.adminPath && isValidAdminPath(normalizeAdminPath(settings.adminPath)) ? normalizeAdminPath(settings.adminPath) : DEFAULT_ADMIN_PATH,
+    adminPath: effectiveAdminPath(settings),
     defaultDomain: settings.defaultDomain ?? "",
     cfZoneId: settings.cfZoneId ?? "",
     hasCfApiToken: Boolean(settings.cfApiToken),
