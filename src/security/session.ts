@@ -25,7 +25,7 @@ export async function createSession(secret: string) {
 }
 
 export async function isValidSession(request: Request, env: Env) {
-  const secret = env.SESSION_SECRET;
+  const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
   if (!secret) return false;
   const cookie = request.headers.get("cookie")?.split(";").map((item) => item.trim()).find((item) => item.startsWith(`${SESSION_COOKIE}=`));
   if (!cookie) return false;
@@ -52,4 +52,3 @@ export function sessionCookie(value: string, request: Request) {
 export function expiredCookie() {
   return `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict`;
 }
-
