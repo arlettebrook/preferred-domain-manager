@@ -22,6 +22,15 @@ export function isIPv6(value: string) {
   return double !== -1 ? groups.length < 8 : groups.length === 8;
 }
 
+export type DnsRecordType = "A" | "AAAA" | "CNAME";
+
+export function detectDnsRecordType(value: string): DnsRecordType {
+  const content = value.trim();
+  if (isIPv4(content)) return "A";
+  if (isIPv6(content)) return "AAAA";
+  return "CNAME";
+}
+
 export function validIp(value: string) {
   const ip = normalizeIp(value);
   return isIPv4(ip) || isIPv6(ip);
@@ -35,4 +44,3 @@ export function escapeHtml(value: string) {
   const replacements: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
   return value.replace(/[&<>"']/g, (character) => replacements[character] ?? character);
 }
-

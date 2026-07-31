@@ -1,7 +1,7 @@
 import { DNS_TTL, MANAGED_COMMENT } from "../config";
 import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
-import { isIPv4, isIPv6, normalizeDomain } from "../validation";
+import { detectDnsRecordType, isIPv4, isIPv6, normalizeDomain } from "../validation";
 
 async function cfFetch<T>(zone: DnsTarget, path: string, init: RequestInit, env: Env, globalApiToken?: string): Promise<T> {
   const token = globalApiToken;
@@ -20,11 +20,11 @@ async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: st
   return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
 }
 
-function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
+function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectType = false) {
   const allowedTypes = new Set(["A", "AAAA", "CNAME"]);
-  const type = String(input.type ?? "").toUpperCase();
   const name = String(input.name ?? "").trim().toLowerCase();
   const content = String(input.content ?? "").trim();
+  const type = detectType ? detectDnsRecordType(content) : String(input.type ?? "").toUpperCase();
   if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
   const domain = normalizeDomain(zone.domain);
   if (!domain || name !== domain) throw new HttpError(400, `记录名称只能是 ${domain}`);
@@ -99,7 +99,7 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
   if (!current) throw new HttpError(404, "DNS 记录不存在");
   if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑默认域名的 A、AAAA、CNAME 记录");
-  const validated = validateRecordInput(zone, input);
+  const validated = validateRecordInput(zone, input, true);
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
   const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && record.content === current.content);

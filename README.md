@@ -9,7 +9,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
-- DNS 编辑只允许操作默认域名的 `A`、`AAAA`、`CNAME` 记录；新增或编辑主域名记录会自动新增或同步对应泛记录。CNAME 会清理主域名和泛域名两侧冲突的 A/AAAA 记录，存在成对 CNAME 时优选 IP 同步会跳过这两个名称。
+- DNS 编辑只允许操作默认域名的 `A`、`AAAA`、`CNAME` 记录；新增或编辑主域名记录会自动新增或同步对应泛记录。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。CNAME 会清理主域名和泛域名两侧冲突的 A/AAAA 记录，存在成对 CNAME 时优选 IP 同步会跳过这两个名称。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
 - 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
@@ -126,7 +126,7 @@ Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定�
 
 Telegram 菜单会显示 `/start`、`/dns`、`/add`、`/edit`、`/delete`、`/update`、`/help` 和 `/cancel`。发送 `/dns` 后，记录按当前页从 1 开始编号；例如发送 `/edit 2` 编辑第二条，发送 `/delete 2` 删除第二条。序号选择状态保存 10 分钟，刷新或翻页后应使用最新页面中的序号。`/update` 仅支持当前可管理记录恰好为一条的场景；原有完整格式 `/dns update <记录 ID> <类型> <域名> <内容>` 仍然兼容。
 
-Bot 与管理面板共用 DNS 规则：只操作默认域名，支持 A、AAAA、CNAME；新增或编辑会自动同步对应泛记录，CNAME 会清理两侧冲突的 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
+Bot 与管理面板共用 DNS 规则：只操作默认域名，支持 A、AAAA、CNAME；新增或编辑会自动同步对应泛记录，编辑和 `/update` 会按内容自动识别 A、AAAA 或 CNAME，CNAME 会清理两侧冲突的 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
 
 ### 4. 配置 Worker Routes
 

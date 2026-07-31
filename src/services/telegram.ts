@@ -2,6 +2,7 @@ import { HttpError } from "../errors";
 import { createDnsRecord, deleteDnsRecord, listDnsRecords, updateDnsRecord } from "./cloudflare-dns";
 import { getSettings } from "./settings";
 import { DnsRecord, Env, Settings } from "../types";
+import { detectDnsRecordType } from "../validation";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const MAX_MESSAGE_LENGTH = 3900;
@@ -478,7 +479,7 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard(pending.page ?? 0));
   }
   if (!pending.recordId) throw new HttpError(400, "编辑状态已失效，请重新选择记录");
-  const record = await updateDnsRecord(target, pending.recordId, { type: pending.type, name: pending.name, content }, env, settings.cfApiToken);
+  const record = await updateDnsRecord(target, pending.recordId, { type: detectDnsRecordType(content), name: pending.name, content }, env, settings.cfApiToken);
   await clearPending(env, chatId, message.from!.id);
   return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard(pending.page ?? 0));
 }
@@ -522,10 +523,9 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length >= 4) {
-    const type = recordType(args[2]);
-    if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
     const hasLegacyName = args.length >= 5 && args[3].toLowerCase() === target.domain;
-    const record = await updateDnsRecord(target, args[1], { type, name: hasLegacyName ? args[3] : target.domain, content: args.slice(hasLegacyName ? 4 : 3).join(" ") }, env, settings.cfApiToken);
+    const content = args.slice(hasLegacyName ? 4 : 3).join(" ");
+    const record = await updateDnsRecord(target, args[1], { type: detectDnsRecordType(content), name: hasLegacyName ? args[3] : target.domain, content }, env, settings.cfApiToken);
     return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length === 2) {
@@ -534,12 +534,11 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
       return sendText(settings, chatId, "当前不是唯一记录，无法使用快捷更新。请使用 /dns 后点击序号，或使用 /edit 序号。", backKeyboard());
     }
     const record = records[0];
-    const type = recordType(record.type);
-    if (!type) throw new HttpError(400, "不支持更新此记录类型");
+    const content = args[1];
     const updated = await updateDnsRecord(target, record.id, {
-      type,
+      type: detectDnsRecordType(content),
       name: record.name,
-      content: args[1],
+      content,
     }, env, settings.cfApiToken);
     return sendText(settings, chatId, `修改成功\n\n${recordText(updated)}`, resultKeyboard());
   }
