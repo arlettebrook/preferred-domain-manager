@@ -44,6 +44,10 @@ function pairedName(zone: DnsTarget) {
   return `*.${normalizeDomain(zone.domain)}`;
 }
 
+function equivalentDnsContent(left: string, right: string) {
+  return left.trim().toLowerCase().replace(/\.$/, "") === right.trim().toLowerCase().replace(/\.$/, "");
+}
+
 async function removeConflictingRecords(
   zone: DnsTarget,
   names: string[],
@@ -77,9 +81,12 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   const validated = validateRecordInput(zone, input);
+  const recordsBeforeChange = await listDnsRecords(zone, env, globalApiToken);
+  const duplicateRoot = recordsBeforeChange.find((record) => record.name === validated.name && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
+  if (duplicateRoot) throw new HttpError(409, `${validated.type} 记录已经存在：${duplicateRoot.content}`);
   const wildcard = pairedName(zone);
   await removeConflictingRecords(zone, [validated.name, wildcard], validated.type, env, globalApiToken);
-  const existingWildcard = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.name === wildcard && record.type === validated.type && record.content === validated.content);
+  const existingWildcard = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.name === wildcard && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
   const root = await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
   if (existingWildcard) return root;
   try {
@@ -102,7 +109,9 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   const validated = validateRecordInput(zone, input, true);
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
-  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && record.content === current.content);
+  const duplicateRoot = records.find((record) => record.id !== id && record.name === validated.name && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
+  if (duplicateRoot) throw new HttpError(409, `${validated.type} 记录已经存在：${duplicateRoot.content}`);
+  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && equivalentDnsContent(record.content, current.content));
   const exceptIds = [id, ...(pairedWildcard ? [pairedWildcard.id] : [])];
   await removeConflictingRecords(zone, [validated.name, wildcard], validated.type, env, globalApiToken, exceptIds);
 
@@ -129,7 +138,7 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
   if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除默认域名的 A、AAAA、CNAME 记录");
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
-  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && record.content === current.content);
+  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && equivalentDnsContent(record.content, current.content));
   await deleteRecord(zone, id, env, globalApiToken);
   if (pairedWildcard) await deleteRecord(zone, pairedWildcard.id, env, globalApiToken);
 }
