@@ -7,7 +7,6 @@ import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
 import { handleTelegramWebhook } from "./services/telegram";
 import { effectiveAdminPath, getSettings } from "./services/settings";
-import { DEFAULT_ADMIN_PATH } from "./validation";
 
 export { SyncLock };
 
@@ -21,7 +20,7 @@ export default {
       const adminPath = effectiveAdminPath(settings);
       const requestPath = url.pathname.replace(/\/+$/, "") || "/";
       if (requestPath === adminPath) return html(adminPage());
-      if (requestPath === DEFAULT_ADMIN_PATH && adminPath !== DEFAULT_ADMIN_PATH) return Response.redirect(new URL(adminPath, request.url), 302);
+      if (requestPath !== "/") return Response.redirect(new URL("/", request.url), 302);
       return html(landingPage(url.host, adminPath));
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
