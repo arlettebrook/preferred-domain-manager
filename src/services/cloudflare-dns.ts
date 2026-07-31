@@ -2,18 +2,7 @@ import { DNS_TTL, MANAGED_COMMENT } from "../config";
 import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
 import { detectDnsRecordType, isIPv4, isIPv6, normalizeDomain } from "../validation";
-
-async function cfFetch<T>(zone: DnsTarget, path: string, init: RequestInit, env: Env, globalApiToken?: string): Promise<T> {
-  const token = globalApiToken;
-  if (!token) throw new HttpError(400, "没有配置 Cloudflare API Token");
-  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) },
-  });
-  const body = await response.json<{ success: boolean; result: T; errors?: Array<{ message?: string }> }>();
-  if (!response.ok || !body.success) throw new HttpError(response.status || 502, body.errors?.map((error) => error.message).join("; ") || "Cloudflare API 请求失败");
-  return body.result;
-}
+import { cloudflareFetch as cfFetch } from "../integrations/cloudflare/client";
 
 async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: string, source?: DnsRecord[]) {
   const records = source ?? await listDnsRecords(zone, env, globalApiToken);

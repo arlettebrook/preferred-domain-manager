@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && wrangler deploy --dry-run"
+    "check:ui": "node scripts/check-ui.mjs",
+    "check": "npm run typecheck && npm run check:ui && wrangler deploy --dry-run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260730.1",

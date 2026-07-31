@@ -20,18 +20,20 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 
 ```text
 src/
-├─ worker.ts                     Worker 入口、页面路由和 Cron
+├─ main.ts                       Worker 入口、页面路由和 Cron
 ├─ api.ts                        管理 API 与配置保存
-├─ ui.ts                         首页与管理后台页面
+├─ ui/                           页面入口与管理后台模板
+│  ├─ index.ts                   UI 统一导出入口
+│  └─ pages.ts                   首页和管理后台页面
+├─ integrations/cloudflare/      Cloudflare 外部 API 客户端
+├─ services/                     DNS、Telegram、设置、IP 和同步业务
+├─ security/session.ts           HttpOnly Cookie 签名会话
 ├─ types.ts / config.ts          共享类型和常量
 ├─ validation.ts / http.ts       输入校验和 HTTP 工具
-├─ security/session.ts           HttpOnly Cookie 签名会话
-├─ services/settings.ts          KV 配置读写
-├─ services/ip-sources.ts        多来源 IP、去重和 TCP 443 探测
-├─ services/cloudflare-dns.ts    Cloudflare DNS Diff Update
-├─ services/telegram.ts          Telegram Webhook 与 DNS Bot 命令
-├─ services/sync.ts              同步编排和 Durable Object 锁
-└─ durable-objects/sync-lock.ts  原子同步锁
+└─ durable-objects/              Durable Object 实现
+
+scripts/                         本地检查脚本
+docs/development.md              开发结构与修改指南
 ```
 
 ## 通过 Cloudflare Workers 页面连接 GitHub 部署

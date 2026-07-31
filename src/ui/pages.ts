@@ -1,4 +1,4 @@
-import { escapeHtml } from "./validation";
+import { escapeHtml } from "../validation";
 
 export function landingPage(host: string) {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1220"><title>优选域名管理面板</title><style>
