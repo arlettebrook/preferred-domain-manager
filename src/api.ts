@@ -1,10 +1,10 @@
 import { SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { collectPreferredIps } from "./services/ip-sources";
-import { getSettings, publicSettings } from "./services/settings";
+import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
-import { Env, IpSource, Settings } from "./types";
+import { DomainProfile, Env, IpSource, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -19,6 +19,7 @@ async function saveConfig(request: Request, env: Env) {
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
     adminPath?: string;
+    domains?: Array<Partial<DomainProfile>>;
     defaultDomain?: string;
     cfZoneId?: string;
     cfApiToken?: string;
@@ -29,6 +30,27 @@ async function saveConfig(request: Request, env: Env) {
   const previous = await getSettings(env);
   const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
   if (!isValidAdminPath(adminPath)) throw new HttpError(400, "管理员访问路径格式无效，仅支持类似 /admin 或 /manage 的路径，且不能使用 API/Webhook 路径");
+  const requestedDomain = input.defaultDomain !== undefined ? normalizeDomain(String(input.defaultDomain)) : normalizeDomain(previous.defaultDomain || "");
+  const requestedZoneId = input.cfZoneId !== undefined ? String(input.cfZoneId).trim() : String(previous.cfZoneId || "").trim();
+  const previousDomains = domainProfiles(previous);
+  const requestedDomains = input.domains?.map((item) => {
+    const domain = normalizeDomain(String(item.domain || ""));
+    const previousProfile = previousDomains.find((profile) => profile.id === item.id || profile.domain === domain);
+    const apiToken = typeof item.apiToken === "string" && item.apiToken ? item.apiToken : previousProfile?.apiToken;
+    return { ...item, apiToken };
+  });
+  let domains = input.domains !== undefined
+    ? domainProfiles({ domains: requestedDomains as DomainProfile[], defaultDomain: requestedDomain, cfZoneId: requestedZoneId, cfApiToken: previous.cfApiToken })
+    : domainProfiles(previous);
+  if (input.domains === undefined && (input.defaultDomain !== undefined || input.cfZoneId !== undefined) && requestedDomain && requestedZoneId) {
+    const activeIndex = domains.findIndex((item) => item.domain === normalizeDomain(previous.defaultDomain || ""));
+    const legacyToken = typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken;
+    if (activeIndex >= 0) domains[activeIndex] = { ...domains[activeIndex], domain: requestedDomain, zoneId: requestedZoneId, ...(legacyToken ? { apiToken: legacyToken } : {}) };
+    else domains = [{ id: `domain:${requestedDomain}`, domain: requestedDomain, zoneId: requestedZoneId, ...(legacyToken ? { apiToken: legacyToken } : {}) }, ...domains];
+  }
+  const missingToken = domains.find((profile) => !profile.apiToken);
+  if (missingToken) throw new HttpError(400, `请为 ${missingToken.domain} 配置独立的 Cloudflare API Token`);
+  const activeDomain = domains.find((item) => item.domain === requestedDomain) || domains[0];
   const ipSources = (input.ipSources ?? previous.ipSources ?? []).map((source) => ({
     id: String(source.id || crypto.randomUUID()),
     url: String(source.url || "").trim(),
@@ -38,9 +60,10 @@ async function saveConfig(request: Request, env: Env) {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
     adminPath,
-    defaultDomain: input.defaultDomain !== undefined ? normalizeDomain(String(input.defaultDomain)) : normalizeDomain(previous.defaultDomain || ""),
-    cfZoneId: input.cfZoneId !== undefined ? String(input.cfZoneId).trim() : String(previous.cfZoneId || "").trim(),
-    cfApiToken: typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken,
+    domains,
+    defaultDomain: activeDomain?.domain || requestedDomain,
+    cfZoneId: activeDomain?.zoneId || requestedZoneId,
+    cfApiToken: undefined,
     telegramBotToken: typeof input.telegramBotToken === "string" && input.telegramBotToken ? input.telegramBotToken : previous.telegramBotToken,
     telegramAllowedUserIds: input.telegramAllowedUserIds !== undefined
       ? (Array.isArray(input.telegramAllowedUserIds) ? input.telegramAllowedUserIds : String(input.telegramAllowedUserIds).split(/[,\s]+/)).map(String).map((id) => id.trim()).filter((id) => /^\d+$/.test(id)).slice(0, 50)
@@ -86,18 +109,21 @@ export async function handleApi(request: Request, env: Env) {
   const dnsMatch = url.pathname.match(/^\/api\/dns\/records(?:\/([^/]+))?$/);
   if (dnsMatch) {
     const settings = await getSettings(env);
-    const target = settings.defaultDomain && settings.cfZoneId ? { domain: settings.defaultDomain, zoneId: settings.cfZoneId } : undefined;
-    if (!target) throw new HttpError(400, "请先在设置中保存 DEFAULT_DOMAIN 和 CF_ZONE_ID");
-    if (request.method === "GET" && !dnsMatch[1]) return json({ records: (await listDnsRecords(target, env, settings.cfApiToken)).filter((record) => isEditableDnsRecord(target, record)), domain: target.domain }, 200, { "cache-control": "no-store" });
+    const domainId = url.searchParams.get("domainId") || undefined;
+    const target = effectiveTarget(settings, domainId);
+    if (!target) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "请先在设置中保存默认域名和 Zone ID");
+    const apiToken = effectiveApiToken(settings, domainId);
+    if (!apiToken) throw new HttpError(400, `域名 ${target.domain} 尚未配置 Cloudflare API Token`);
+    if (request.method === "GET" && !dnsMatch[1]) return json({ records: (await listDnsRecords(target, env, apiToken)).filter((record) => isEditableDnsRecord(target, record)), domain: target.domain }, 200, { "cache-control": "no-store" });
     if (request.method === "POST" && !dnsMatch[1]) {
       const body = await readJson<Record<string, unknown>>(request);
-      return json({ record: await createDnsRecord(target, body, env, settings.cfApiToken) }, 201);
+      return json({ record: await createDnsRecord(target, body, env, apiToken) }, 201);
     }
     if (request.method === "PUT" && dnsMatch[1]) {
       const body = await readJson<Record<string, unknown>>(request);
-      return json({ record: await updateDnsRecord(target, dnsMatch[1], body, env, settings.cfApiToken) });
+      return json({ record: await updateDnsRecord(target, dnsMatch[1], body, env, apiToken) });
     }
-    if (request.method === "DELETE" && dnsMatch[1]) { await deleteDnsRecord(target, dnsMatch[1], env, settings.cfApiToken); return json({ ok: true }); }
+    if (request.method === "DELETE" && dnsMatch[1]) { await deleteDnsRecord(target, dnsMatch[1], env, apiToken); return json({ ok: true }); }
     throw new HttpError(405, "不支持的 DNS 操作");
   }
 
@@ -107,7 +133,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {
-      return json({ ok: true, ...(await runSync(env)) });
+      return json({ ok: true, ...(await runSync(env, url.searchParams.get("domainId") || undefined)) });
     } catch (error) {
       if (error instanceof LockBusyError) return json({ ok: false, error: error.message }, 409);
       throw error;

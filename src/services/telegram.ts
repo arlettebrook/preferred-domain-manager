@@ -1,6 +1,6 @@
 import { HttpError } from "../errors";
 import { createDnsRecord, deleteDnsRecord, listDnsRecords, updateDnsRecord } from "./cloudflare-dns";
-import { getSettings } from "./settings";
+import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { DnsRecord, Env, Settings } from "../types";
 import { detectDnsRecordType } from "../validation";
 
@@ -11,6 +11,7 @@ const PENDING_TTL_SECONDS = 10 * 60;
 const PENDING_PREFIX = "telegram:pending:";
 const SELECTION_TTL_SECONDS = 10 * 60;
 const SELECTION_PREFIX = "telegram:selection:";
+const DOMAIN_SELECTION_PREFIX = "telegram:domain:";
 
 type RecordType = "A" | "AAAA" | "CNAME";
 
@@ -142,6 +143,18 @@ function selectionKey(chatId: number, userId: number) {
   return `${SELECTION_PREFIX}${chatId}:${userId}`;
 }
 
+function domainSelectionKey(chatId: number, userId: number) {
+  return `${DOMAIN_SELECTION_PREFIX}${chatId}:${userId}`;
+}
+
+async function selectedDomainId(env: Env, chatId: number, userId: number) {
+  return env.PDM_KV.get<string>(domainSelectionKey(chatId, userId));
+}
+
+async function saveDomainSelection(env: Env, chatId: number, userId: number, domainId: string) {
+  await env.PDM_KV.put(domainSelectionKey(chatId, userId), domainId, { expirationTtl: SELECTION_TTL_SECONDS });
+}
+
 async function getPending(env: Env, chatId: number, userId: number) {
   return env.PDM_KV.get<PendingInput>(pendingKey(chatId, userId), "json");
 }
@@ -186,12 +199,17 @@ function escapeHtml(value: unknown) {
   }[character] ?? character));
 }
 
-function homeKeyboard(): TelegramReplyMarkup {
+function homeKeyboard(settings?: Settings): TelegramReplyMarkup {
   const rows: TelegramButton[][] = [
     [button("📋 DNS 记录", "menu:list"), button("➕ 添加记录", "menu:add")],
     [button("🔄 刷新", "menu:list"), button("❓ 帮助", "menu:help")],
   ];
+  if (settings && domainProfiles(settings).length > 1) rows.splice(1, 0, [button("◎ 选择域名", "menu:domains")]);
   return { inline_keyboard: rows };
+}
+
+function domainKeyboard(settings: Settings): TelegramReplyMarkup {
+  return { inline_keyboard: domainProfiles(settings).map((profile) => [button(`${profile.domain === settings.defaultDomain ? "✓ " : ""}${profile.domain}`, `domain:${profile.id}`)]).concat([[button("返回主菜单", "menu:home")]]) };
 }
 
 function backKeyboard(): TelegramReplyMarkup {
@@ -307,7 +325,7 @@ async function findRecord(target: { domain: string; zoneId: string }, env: Env, 
 }
 
 async function showHome(settings: Settings, chatId: number) {
-  await sendText(settings, chatId, homeText(settings), homeKeyboard());
+  await sendText(settings, chatId, homeText(settings), homeKeyboard(settings));
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
@@ -388,7 +406,18 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
 
   if (data === "menu:home") {
     await clearPending(env, chatId, callback.from.id);
-    return editText(settings, callback, homeText(settings), homeKeyboard());
+    return editText(settings, callback, homeText(settings), homeKeyboard(settings));
+  }
+  if (data === "menu:domains") return editText(settings, callback, "请选择要编辑的域名", domainKeyboard(settings));
+  if (data.startsWith("domain:")) {
+    const domainId = data.slice(7);
+    const target = effectiveTarget(settings, domainId);
+    if (!target) throw new HttpError(404, "指定的域名不存在");
+    await saveDomainSelection(env, chatId, callback.from.id, domainId);
+    await clearPending(env, chatId, callback.from.id);
+    await env.PDM_KV.delete(selectionKey(chatId, callback.from.id));
+    const scopedSettings = { ...settings, defaultDomain: target.domain, cfZoneId: target.zoneId };
+    return editText(scopedSettings, callback, homeText(scopedSettings), homeKeyboard(scopedSettings));
   }
   if (data === "menu:help") return editText(settings, callback, helpText(), backKeyboard());
   if (data === "menu:list") return showList(settings, env, chatId, callback.from.id, 0, callback);
@@ -401,7 +430,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const pending = await getPending(env, chatId, callback.from.id);
     await clearPending(env, chatId, callback.from.id);
     if (pending?.page != null) return showList(settings, env, chatId, callback.from.id, pending.page, callback);
-    return editText(settings, callback, homeText(settings), homeKeyboard());
+    return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
   if (data.startsWith("add:type:")) {
     const type = recordType(data.slice(9));
@@ -559,7 +588,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
 }
 
 export async function handleTelegramWebhook(request: Request, env: Env) {
-  const settings = await getSettings(env);
+  let settings = await getSettings(env);
   if (!settings.telegramBotToken || !settings.telegramWebhookSecret) return new Response("Not configured", { status: 404 });
   const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
   if (!secret || secret !== settings.telegramWebhookSecret) return new Response("Forbidden", { status: 403 });
@@ -575,6 +604,12 @@ export async function handleTelegramWebhook(request: Request, env: Env) {
     if (callback) await answerCallback(settings, callback, "你没有权限操作此 Bot").catch(() => undefined);
     return new Response("ok");
   }
+
+  const selectedId = (await selectedDomainId(env, chatId, userId)) || undefined;
+  const selectedTarget = selectedId ? effectiveTarget(settings, selectedId) : undefined;
+  const selectedToken = effectiveApiToken(settings, selectedId);
+  if (selectedTarget) settings = { ...settings, defaultDomain: selectedTarget.domain, cfZoneId: selectedTarget.zoneId, cfApiToken: selectedToken };
+  else settings = { ...settings, cfApiToken: effectiveApiToken(settings) };
 
   try {
     if (callback) await handleCallback(settings, env, callback);

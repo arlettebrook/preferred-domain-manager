@@ -16,9 +16,18 @@ export interface IpSource {
   enabled: boolean;
 }
 
+export interface DomainProfile {
+  id: string;
+  domain: string;
+  zoneId: string;
+  apiToken?: string;
+  hasApiToken?: boolean;
+}
+
 export interface Settings {
   ipSources: IpSource[];
   manualIps: string[];
+  domains?: DomainProfile[];
   adminPath?: string;
   cfApiToken?: string;
   defaultDomain?: string;
