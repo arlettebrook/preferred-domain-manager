@@ -211,21 +211,20 @@ function helpText() {
     "/start 或 /help  打开主菜单",
     "/dns  查看 DNS 记录",
     "/add  新增 DNS 记录",
-    "/dns add A 〈域名〉 〈IPv4〉",
-    "/dns add AAAA 〈域名〉 〈IPv6〉",
-    "/dns add CNAME 〈域名〉 〈目标〉",
+    "/dns add A 〈IPv4〉",
+    "/dns add AAAA 〈IPv6〉",
+    "/dns add CNAME 〈目标〉",
     "/edit [序号] 编辑记录；唯一记录时可省略序号",
     "/delete [序号] 删除记录；唯一记录时可省略序号",
     "/update 〈IP 或域名〉 仅有一条记录时快捷更新",
     "点击域名或记录内容可复制，点击序号可选择编辑或删除。",
     "",
-    "仅允许默认域名和 *.默认域名；仅支持 A、AAAA、CNAME；CNAME 会自动删除同名 A/AAAA。",
+    "仅操作默认域名；仅支持 A、AAAA、CNAME；保存后会自动同步对应泛记录。CNAME 会清理两侧同名 A/AAAA。",
   ].join("\n");
 }
 
 function filteredRecords(records: DnsRecord[], domain: string) {
-  const names = new Set([domain, `*.${domain}`]);
-  return records.filter((record) => names.has(record.name) && ["A", "AAAA", "CNAME"].includes(record.type));
+  return records.filter((record) => record.name === domain && ["A", "AAAA", "CNAME"].includes(record.type));
 }
 
 function recordText(record: DnsRecord) {
@@ -233,7 +232,7 @@ function recordText(record: DnsRecord) {
 }
 
 function recordListText(records: DnsRecord[], page: number, totalPages: number, totalCount: number, domain: string) {
-  if (!records.length) return `DNS 记录\n\n<code>${escapeHtml(domain)}</code> 和 <code>*.${escapeHtml(domain)}</code> 当前没有可管理记录。\n\n使用 /add 新增记录。`;
+  if (!records.length) return `DNS 记录\n\n<code>${escapeHtml(domain)}</code> 当前没有可管理记录。\n\n使用 /add 新增记录。`;
   return [
     `DNS 记录（第 ${page + 1}/${totalPages} 页，共 ${totalCount} 条）`,
     "点击域名或 IP/CNAME 内容可复制；点击序号选择操作。",
@@ -263,27 +262,11 @@ function typeKeyboard(): TelegramReplyMarkup {
   ] };
 }
 
-function nameKeyboard(type: RecordType): TelegramReplyMarkup {
-  return { inline_keyboard: [
-    [button("根域名", `add:name:${type}:root`), button("泛域名 *", `add:name:${type}:wildcard`)],
-    [button("↩️ 返回类型选择", "menu:add")],
-  ] };
-}
-
 function editTypeKeyboard(recordId: string, currentType: RecordType): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button(`${currentType === "A" ? "✅" : ""} A · IPv4`, `edit:type:${recordId}:A`), button(`${currentType === "AAAA" ? "✅" : ""} AAAA · IPv6`, `edit:type:${recordId}:AAAA`)],
     [button(`${currentType === "CNAME" ? "✅" : ""} CNAME · 别名`, `edit:type:${recordId}:CNAME`)],
     [button("↩️ 返回内容编辑", `edit:${recordId}`)],
-  ] };
-}
-
-function editNameKeyboard(recordId: string, type: RecordType, currentName: string, domain: string): TelegramReplyMarkup {
-  const root = currentName === domain ? "✅ 根域名" : "根域名";
-  const wildcard = currentName === `*.${domain}` ? "✅ 泛域名 *" : "泛域名 *";
-  return { inline_keyboard: [
-    [button(root, `edit:name:${recordId}:${type}:root`), button(wildcard, `edit:name:${recordId}:${type}:wildcard`)],
-    [button("↩️ 返回类型选择", `edit-options:${recordId}`)],
   ] };
 }
 
@@ -422,14 +405,8 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   if (data.startsWith("add:type:")) {
     const type = recordType(data.slice(9));
     if (!type) throw new HttpError(400, "不支持的 DNS 记录类型");
-    return editText(settings, callback, `新增 ${type} 记录\n\n请选择记录名称：`, nameKeyboard(type));
-  }
-  if (data.startsWith("add:name:")) {
-    const parts = data.split(":");
-    const type = recordType(parts[2] || "");
-    if (!type || (parts[3] !== "root" && parts[3] !== "wildcard")) throw new HttpError(400, "无效的新增操作");
     const target = targetFromSettings(settings);
-    const name = parts[3] === "root" ? target.domain : `*.${target.domain}`;
+    const name = target.domain;
     await setPending(env, chatId, callback.from.id, { kind: "add", type, name });
     await sendText(settings, chatId, `新增 ${type} · <code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`, cancelKeyboard());
     return;
@@ -452,20 +429,8 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const target = targetFromSettings(settings);
     const record = await findRecord(target, env, settings, recordId);
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
-    return editText(settings, callback, `完整编辑\n\n新类型：${type}\n\n请选择记录名称：`, editNameKeyboard(record.id, type, record.name, target.domain));
-  }
-  if (data.startsWith("edit:name:")) {
-    const parts = data.split(":");
-    const recordId = parts[2] || "";
-    const type = recordType(parts[3] || "");
-    const nameKind = parts[4];
-    if (!type || (nameKind !== "root" && nameKind !== "wildcard")) throw new HttpError(400, "无效的编辑操作");
-    const target = targetFromSettings(settings);
-    const record = await findRecord(target, env, settings, recordId);
-    if (!record) throw new HttpError(404, "记录不存在或已被删除");
-    const name = nameKind === "root" ? target.domain : `*.${target.domain}`;
-    await setPending(env, chatId, callback.from.id, { kind: "edit", type, name, recordId, page: await selectionPage(env, chatId, callback.from.id) });
-    await sendText(settings, chatId, `完整编辑 · ${type} <code>${escapeHtml(name)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
+    await setPending(env, chatId, callback.from.id, { kind: "edit", type, name: target.domain, recordId, page: await selectionPage(env, chatId, callback.from.id) });
+    await sendText(settings, chatId, `完整编辑 · ${type} <code>${escapeHtml(target.domain)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
     return;
   }
   if (data.startsWith("edit-content:")) {
@@ -537,7 +502,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   }
   if (command === "list" || command === "ls" || command === "refresh") return showList(settings, env, chatId, message.from!.id, 0);
   if (command === "add" && args.length === 1) return sendText(settings, chatId, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
-  if (command === "add" && args.length > 1 && args.length < 4) return sendText(settings, chatId, "格式：/add A 〈域名〉 〈IPv4〉，或直接点击新增菜单。", backKeyboard());
+  if (command === "add" && args.length > 1 && args.length < 3) return sendText(settings, chatId, "格式：/add A 〈IPv4〉，或直接点击新增菜单。", backKeyboard());
   if (command === "edit" && args.length > 2) return sendText(settings, chatId, "格式：/edit 〈序号〉，请先发送 /dns 获取最新序号。", backKeyboard());
   if (command === "delete" && args.length > 2) return sendText(settings, chatId, "格式：/delete 〈序号〉，请先发送 /dns 获取最新序号。", backKeyboard());
   const target = targetFromSettings(settings);
@@ -551,16 +516,18 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     if (records.length === 1) return showDeletePrompt(settings, chatId, records[0], 0);
     return showList(settings, env, chatId, message.from!.id, 0);
   }
-  if (command === "add" && args.length >= 4) {
+  if (command === "add" && args.length >= 3) {
     const type = recordType(args[1]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
-    const record = await createDnsRecord(target, { type, name: args[2], content: args.slice(3).join(" ") }, env, settings.cfApiToken);
+    const hasLegacyName = args.length >= 4 && args[2].toLowerCase() === target.domain;
+    const record = await createDnsRecord(target, { type, name: target.domain, content: args.slice(hasLegacyName ? 3 : 2).join(" ") }, env, settings.cfApiToken);
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
-  if (command === "update" && args.length >= 5) {
+  if (command === "update" && args.length >= 4) {
     const type = recordType(args[2]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
-    const record = await updateDnsRecord(target, args[1], { type, name: args[3], content: args.slice(4).join(" ") }, env, settings.cfApiToken);
+    const hasLegacyName = args.length >= 5 && args[3].toLowerCase() === target.domain;
+    const record = await updateDnsRecord(target, args[1], { type, name: hasLegacyName ? args[3] : target.domain, content: args.slice(hasLegacyName ? 4 : 3).join(" ") }, env, settings.cfApiToken);
     return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length === 2) {

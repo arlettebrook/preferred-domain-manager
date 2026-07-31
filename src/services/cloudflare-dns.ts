@@ -32,8 +32,7 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
   const content = String(input.content ?? "").trim();
   if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
   const domain = normalizeDomain(zone.domain);
-  const allowedNames = new Set([domain, `*.${domain}`]);
-  if (!domain || !allowedNames.has(name)) throw new HttpError(400, `记录名称只能是 ${domain} 或 *.${domain}`);
+  if (!domain || name !== domain) throw new HttpError(400, `记录名称只能是 ${domain}`);
   if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
   if (type === "A" && !isIPv4(content)) throw new HttpError(400, "A 记录内容必须是有效的 IPv4 地址");
   if (type === "AAAA" && !isIPv6(content)) throw new HttpError(400, "AAAA 记录内容必须是有效的 IPv6 地址");
@@ -43,25 +42,32 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>) {
 
 export function isEditableDnsRecord(zone: DnsTarget, record: DnsRecord) {
   const domain = normalizeDomain(zone.domain);
-  return new Set([domain, `*.${domain}`]).has(record.name.toLowerCase()) && ["A", "AAAA", "CNAME"].includes(record.type);
+  return record.name.toLowerCase() === domain && ["A", "AAAA", "CNAME"].includes(record.type);
 }
 
-async function removeAddressRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
-  const records = await listDnsRecords(zone, env, globalApiToken);
-  const addressRecords = records.filter((record) => record.name === name && (record.type === "A" || record.type === "AAAA") && record.id !== exceptId);
-  for (const record of addressRecords) {
-    await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
-  }
-  return addressRecords.length;
+function pairedName(zone: DnsTarget) {
+  return `*.${normalizeDomain(zone.domain)}`;
 }
 
-async function removeCnameRecords(zone: DnsTarget, name: string, env: Env, globalApiToken?: string, exceptId?: string) {
+async function removeConflictingRecords(
+  zone: DnsTarget,
+  names: string[],
+  type: string,
+  env: Env,
+  globalApiToken?: string,
+  exceptIds: string[] = [],
+) {
   const records = await listDnsRecords(zone, env, globalApiToken);
-  const cnameRecords = records.filter((record) => record.name === name && record.type === "CNAME" && record.id !== exceptId);
-  for (const record of cnameRecords) {
+  const conflictingTypes = type === "CNAME" ? new Set(["A", "AAAA", "CNAME"]) : new Set(["CNAME"]);
+  const removed = records.filter((record) => names.includes(record.name) && conflictingTypes.has(record.type) && !exceptIds.includes(record.id));
+  for (const record of removed) {
     await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
   }
-  return cnameRecords.length;
+  return removed.length;
+}
+
+async function deleteRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
+  await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
 }
 
 export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
@@ -76,45 +82,73 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   const validated = validateRecordInput(zone, input);
-  if (validated.type === "CNAME") await removeAddressRecords(zone, validated.name, env, globalApiToken);
-  else await removeCnameRecords(zone, validated.name, env, globalApiToken);
-  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
+  const wildcard = pairedName(zone);
+  await removeConflictingRecords(zone, [validated.name, wildcard], validated.type, env, globalApiToken);
+  const existingWildcard = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.name === wildcard && record.type === validated.type && record.content === validated.content);
+  const root = await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
+  if (existingWildcard) return root;
+  try {
+    await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, {
+      method: "POST",
+      body: JSON.stringify({ ...validated, name: wildcard }),
+    }, env, globalApiToken);
+  } catch (error) {
+    await deleteRecord(zone, root.id, env, globalApiToken).catch(() => undefined);
+    throw error;
+  }
+  return root;
 }
 
 export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
   if (!current) throw new HttpError(404, "DNS 记录不存在");
-  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑默认域名或泛域名的 A、AAAA、CNAME 记录");
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑默认域名的 A、AAAA、CNAME 记录");
   const validated = validateRecordInput(zone, input);
-  if (validated.type === "CNAME") {
-    const currentIsAddress = current.type === "A" || current.type === "AAAA";
-    await removeAddressRecords(zone, validated.name, env, globalApiToken, currentIsAddress ? undefined : id);
-    if (currentIsAddress) {
-      await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
-      return createDnsRecord(zone, validated, env, globalApiToken);
-    }
+  const wildcard = pairedName(zone);
+  const records = await listDnsRecords(zone, env, globalApiToken);
+  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && record.content === current.content);
+  const exceptIds = [id, ...(pairedWildcard ? [pairedWildcard.id] : [])];
+  await removeConflictingRecords(zone, [validated.name, wildcard], validated.type, env, globalApiToken, exceptIds);
+
+  const updatedRoot = await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(validated),
+  }, env, globalApiToken);
+  const wildcardInput = { ...validated, name: wildcard };
+  if (pairedWildcard) {
+    await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(pairedWildcard.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(wildcardInput),
+    }, env, globalApiToken);
   } else {
-    await removeCnameRecords(zone, validated.name, env, globalApiToken, id);
+    await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(wildcardInput) }, env, globalApiToken);
   }
-  return cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(validated) }, env, globalApiToken);
+  return updatedRoot;
 }
 
 export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
   if (!current) throw new HttpError(404, "DNS 记录不存在");
-  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除默认域名或泛域名的 A、AAAA、CNAME 记录");
-  await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(id)}`, { method: "DELETE" }, env, globalApiToken);
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除默认域名的 A、AAAA、CNAME 记录");
+  const wildcard = pairedName(zone);
+  const records = await listDnsRecords(zone, env, globalApiToken);
+  const pairedWildcard = records.find((record) => record.name === wildcard && record.type === current.type && record.content === current.content);
+  await deleteRecord(zone, id, env, globalApiToken);
+  if (pairedWildcard) await deleteRecord(zone, pairedWildcard.id, env, globalApiToken);
 }
 
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
   const names = new Set([domain, `*.${domain}`]);
+  const allRecords = await listDnsRecords(zone, env, globalApiToken);
+  const hasPairedCname = allRecords.some((record) => names.has(record.name) && record.type === "CNAME");
+  const namesToSync = hasPairedCname ? new Set<string>() : names;
   const existing = (await listManagedRecords(zone, env, globalApiToken)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
-  for (const name of names) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
+  for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
   let created = 0, deleted = 0, kept = 0, unproxied = 0;
   const seen = new Set<string>();
 
@@ -133,7 +167,7 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
     } else kept++;
   }
 
-  for (const name of names) {
+  for (const name of namesToSync) {
     for (const ip of ips) {
       const type = isIPv4(ip) ? "A" : "AAAA";
       const key = `${name}:${type}:${ip}`;
@@ -143,5 +177,5 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
       created++;
     }
   }
-  return { domain, created, deleted, kept, unproxied, total: ips.length * 2 };
+  return { domain, created, deleted, kept, unproxied, total: ips.length * namesToSync.size };
 }
