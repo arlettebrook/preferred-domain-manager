@@ -5,7 +5,7 @@ import { getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { Env, IpSource, Settings } from "./types";
-import { dedupeIps, normalizeDomain } from "./validation";
+import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
 import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./services/telegram";
@@ -18,6 +18,7 @@ async function saveConfig(request: Request, env: Env) {
   const input = await readJson<{
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
+    adminPath?: string;
     defaultDomain?: string;
     cfZoneId?: string;
     cfApiToken?: string;
@@ -26,6 +27,8 @@ async function saveConfig(request: Request, env: Env) {
     telegramWebhookSecret?: string;
   }>(request);
   const previous = await getSettings(env);
+  const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
+  if (!isValidAdminPath(adminPath)) throw new HttpError(400, "管理员访问路径格式无效，仅支持类似 /admin 或 /manage 的路径，且不能使用 API/Webhook 路径");
   const ipSources = (input.ipSources ?? previous.ipSources ?? []).map((source) => ({
     id: String(source.id || crypto.randomUUID()),
     url: String(source.url || "").trim(),
@@ -34,6 +37,7 @@ async function saveConfig(request: Request, env: Env) {
   const settings: Settings = {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
+    adminPath,
     defaultDomain: input.defaultDomain !== undefined ? normalizeDomain(String(input.defaultDomain)) : normalizeDomain(previous.defaultDomain || ""),
     cfZoneId: input.cfZoneId !== undefined ? String(input.cfZoneId).trim() : String(previous.cfZoneId || "").trim(),
     cfApiToken: typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken,

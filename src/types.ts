@@ -19,6 +19,7 @@ export interface IpSource {
 export interface Settings {
   ipSources: IpSource[];
   manualIps: string[];
+  adminPath?: string;
   cfApiToken?: string;
   defaultDomain?: string;
   cfZoneId?: string;

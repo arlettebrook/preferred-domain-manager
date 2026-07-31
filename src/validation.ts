@@ -2,6 +2,25 @@ export function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, "");
 }
 
+export const DEFAULT_ADMIN_PATH = "/admin";
+
+export function normalizeAdminPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return DEFAULT_ADMIN_PATH;
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.replace(/\/+$/, "") || "/";
+}
+
+export function isValidAdminPath(value: string) {
+  return value !== "/"
+    && value.length <= 80
+    && /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(value)
+    && value !== "/api"
+    && !value.startsWith("/api/")
+    && value !== "/telegram"
+    && !value.startsWith("/telegram/");
+}
+
 export function normalizeIp(value: string) {
   return value.trim().replace(/^\[|\]$/g, "").toLowerCase();
 }

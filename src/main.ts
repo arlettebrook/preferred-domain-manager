@@ -6,6 +6,8 @@ import { adminPage, landingPage } from "./ui";
 import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
 import { handleTelegramWebhook } from "./services/telegram";
+import { getSettings } from "./services/settings";
+import { DEFAULT_ADMIN_PATH, isValidAdminPath, normalizeAdminPath } from "./validation";
 
 export { SyncLock };
 
@@ -15,8 +17,13 @@ export default {
       const url = new URL(request.url);
       if (url.pathname === "/telegram/webhook" && request.method === "POST") return await handleTelegramWebhook(request, env);
       if (url.pathname.startsWith("/api/")) return await handleApi(request, env);
-      if (url.pathname === "/admin" || url.pathname === "/admin/") return html(adminPage());
-      return html(landingPage(url.host));
+      const settings = await getSettings(env);
+      const configuredAdminPath = normalizeAdminPath(settings.adminPath || DEFAULT_ADMIN_PATH);
+      const adminPath = isValidAdminPath(configuredAdminPath) ? configuredAdminPath : DEFAULT_ADMIN_PATH;
+      const requestPath = url.pathname.replace(/\/+$/, "") || "/";
+      if (requestPath === adminPath) return html(adminPage());
+      if (requestPath === DEFAULT_ADMIN_PATH && adminPath !== DEFAULT_ADMIN_PATH) return Response.redirect(new URL(adminPath, request.url), 302);
+      return html(landingPage(url.host, adminPath));
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
       console.error(error);
