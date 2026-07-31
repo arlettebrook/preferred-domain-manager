@@ -197,4 +197,4 @@ npm run deploy
 - `POST /api/telegram/commands`：同步 Telegram Bot 菜单命令。
 - `POST /telegram/webhook`：Telegram 回调入口，由 Telegram 调用，不需要管理员 Cookie。
 
-后台的“全局设置”区域提供独立的“保存设置”按钮；DNS 编辑页面支持搜索、刷新、新建、编辑和删除主域名记录，并自动同步对应泛记录。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
+后台仪表盘集中提供 Cloudflare 连接、IP 来源、优选 IP 操作和 DNS 编辑；DNS 区域支持搜索、刷新、新建、编辑和删除主域名记录，并自动同步对应泛记录。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
