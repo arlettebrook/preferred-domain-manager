@@ -11,7 +11,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
 - DNS 编辑会展示当前 Zone 的全部记录；仅允许操作主域名的 `A`、`AAAA`、`CNAME`，其他记录以只读方式展示。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
-- 每个域名可独立设置“同步泛域名”开关：开启时同步根域名和 `*.域名`，关闭时只同步根域名且保留已有泛记录；记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
+- 每个域名可独立设置“同步泛域名”开关：开启时主域名变更会自动配对 `*.域名`，关闭时两者独立管理；手动/定时优选 IP 同步和 Telegram 仍会处理根域名与泛域名。记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式。
 - Telegram Bot DNS 管理：白名单用户可通过内联键盘查看、新建、修改和删除 DNS 记录，也兼容文本命令。
@@ -97,7 +97,7 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 - `CF_API_TOKEN`：Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
 - `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
 - `CF_ZONE_ID`：Cloudflare Zone ID。
-- “同步泛域名”：开启后主域名 DNS 编辑及优选 IP 同步会联动更新 `*.域名`，关闭后只处理主域名。
+- “同步泛域名”：开启后主域名 DNS 编辑会联动更新 `*.域名`；关闭后可独立编辑主域名和泛域名，但优选 IP 同步仍会处理两者。
 - `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
 - Telegram Bot Token、Webhook Secret 和 Telegram 用户 ID 白名单：在“Telegram Bot”区域编辑。Token 和 Secret 留空表示保持原值。
 

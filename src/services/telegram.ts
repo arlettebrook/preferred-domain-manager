@@ -1,7 +1,7 @@
 import { HttpError } from "../errors";
 import { createDnsRecord, deleteDnsRecord, listDnsRecords, updateDnsRecord } from "./cloudflare-dns";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
-import { DnsRecord, Env, Settings } from "../types";
+import { DnsRecord, DnsTarget, Env, Settings } from "../types";
 import { detectDnsRecordType } from "../validation";
 
 const TELEGRAM_API = "https://api.telegram.org";
@@ -243,8 +243,9 @@ function helpText() {
   ].join("\n");
 }
 
-function filteredRecords(records: DnsRecord[], domain: string) {
-  return records.filter((record) => record.name === domain && ["A", "AAAA", "CNAME"].includes(record.type));
+function filteredRecords(records: DnsRecord[], target: DnsTarget) {
+  const names = target.syncWildcard === false ? [target.domain, `*.${target.domain}`] : [target.domain];
+  return records.filter((record) => names.includes(record.name) && ["A", "AAAA", "CNAME"].includes(record.type));
 }
 
 function recordText(record: DnsRecord) {
@@ -317,11 +318,11 @@ function recordType(value: string): RecordType | undefined {
   return type === "A" || type === "AAAA" || type === "CNAME" ? type : undefined;
 }
 
-async function loadRecords(target: { domain: string; zoneId: string }, env: Env, settings: Settings) {
-  return filteredRecords(await listDnsRecords(target, env, settings.cfApiToken), target.domain);
+async function loadRecords(target: DnsTarget, env: Env, settings: Settings) {
+  return filteredRecords(await listDnsRecords(target, env, settings.cfApiToken), target);
 }
 
-async function findRecord(target: { domain: string; zoneId: string }, env: Env, settings: Settings, id: string) {
+async function findRecord(target: DnsTarget, env: Env, settings: Settings, id: string) {
   return (await loadRecords(target, env, settings)).find((record) => record.id === id);
 }
 
@@ -459,7 +460,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const target = targetFromSettings(settings);
     const record = await findRecord(target, env, settings, recordId);
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
-    await setPending(env, chatId, callback.from.id, { kind: "edit", type, name: target.domain, recordId, page: await selectionPage(env, chatId, callback.from.id) });
+    await setPending(env, chatId, callback.from.id, { kind: "edit", type, name: record.name, recordId, page: await selectionPage(env, chatId, callback.from.id) });
     return editText(settings, callback, `完整编辑 · ${type} <code>${escapeHtml(target.domain)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
   }
   if (data.startsWith("edit-content:")) {
@@ -548,8 +549,12 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   if (command === "add" && args.length >= 3) {
     const type = recordType(args[1]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
-    const hasLegacyName = args.length >= 4 && args[2].toLowerCase() === target.domain;
-    const record = await createDnsRecord(target, { type, name: target.domain, content: args.slice(hasLegacyName ? 3 : 2).join(" ") }, env, settings.cfApiToken);
+    const suppliedName = args.length >= 4 ? args[2].toLowerCase() : "";
+    const wildcard = `*.${target.domain}`;
+    const hasExplicitName = suppliedName === target.domain || (target.syncWildcard === false && suppliedName === wildcard);
+    if (args.length >= 4 && !hasExplicitName) throw new HttpError(400, `记录名称只能是 ${target.domain}${target.syncWildcard === false ? ` 或 ${wildcard}` : ""}`);
+    const name = hasExplicitName ? suppliedName : target.domain;
+    const record = await createDnsRecord(target, { type, name, content: args.slice(hasExplicitName ? 3 : 2).join(" ") }, env, settings.cfApiToken);
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length >= 4) {

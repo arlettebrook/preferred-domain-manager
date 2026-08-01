@@ -16,7 +16,8 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectT
   const type = detectType ? detectDnsRecordType(content) : String(input.type ?? "").toUpperCase();
   if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
   const domain = normalizeDomain(zone.domain);
-  if (!domain || name !== domain) throw new HttpError(400, `记录名称只能是 ${domain}`);
+  const allowedNames = shouldSyncWildcard(zone) ? [domain] : [domain, `*.${domain}`];
+  if (!domain || !allowedNames.includes(name)) throw new HttpError(400, `记录名称只能是 ${allowedNames.join(" 或 ")}`);
   if (!name || !content) throw new HttpError(400, "记录名称和内容不能为空");
   if (type === "A" && !isIPv4(content)) throw new HttpError(400, "A 记录内容必须是有效的 IPv4 地址");
   if (type === "AAAA" && !isIPv6(content)) throw new HttpError(400, "AAAA 记录内容必须是有效的 IPv6 地址");
@@ -26,7 +27,8 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectT
 
 export function isEditableDnsRecord(zone: DnsTarget, record: DnsRecord) {
   const domain = normalizeDomain(zone.domain);
-  return record.name.toLowerCase() === domain && ["A", "AAAA", "CNAME"].includes(record.type);
+  const allowedNames = shouldSyncWildcard(zone) ? [domain] : [domain, `*.${domain}`];
+  return allowedNames.includes(record.name.toLowerCase()) && ["A", "AAAA", "CNAME"].includes(record.type);
 }
 
 function pairedName(zone: DnsTarget) {
@@ -101,7 +103,7 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
   if (!current) throw new HttpError(404, "DNS 记录不存在");
-  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑默认域名的 A、AAAA、CNAME 记录");
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑主域名或泛域名的 A、AAAA、CNAME 记录");
   const validated = validateRecordInput(zone, input, true);
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
@@ -135,7 +137,7 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);
   if (!current) throw new HttpError(404, "DNS 记录不存在");
-  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除默认域名的 A、AAAA、CNAME 记录");
+  if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能删除主域名或泛域名的 A、AAAA、CNAME 记录");
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
   const pairedWildcard = shouldSyncWildcard(zone)
@@ -148,10 +150,13 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
-  const names = new Set(shouldSyncWildcard(zone) ? [domain, `*.${domain}`] : [domain]);
+  const names = new Set([domain, `*.${domain}`]);
   const allRecords = await listDnsRecords(zone, env, globalApiToken);
-  const hasPairedCname = allRecords.some((record) => names.has(record.name) && record.type === "CNAME");
-  const namesToSync = hasPairedCname ? new Set<string>() : names;
+  const cnameNames = new Set(allRecords.filter((record) => names.has(record.name) && record.type === "CNAME").map((record) => record.name));
+  const hasPairedCname = cnameNames.size > 0;
+  const namesToSync = shouldSyncWildcard(zone) && hasPairedCname
+    ? new Set<string>()
+    : new Set([...names].filter((name) => !cnameNames.has(name)));
   const existing = (await listManagedRecords(zone, env, globalApiToken, allRecords)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
