@@ -6,6 +6,11 @@ function profileId(domain: string) {
   return `domain:${domain}`;
 }
 
+function isWildcardSyncEnabled(value: unknown) {
+  if (typeof value === "string") return !["false", "0", "off", "no"].includes(value.trim().toLowerCase());
+  return value !== false && value !== 0;
+}
+
 function normalizeDomainProfiles(values: unknown[]): DomainProfile[] {
   const seen = new Set<string>();
   const ids = new Set<string>();
@@ -26,7 +31,7 @@ function normalizeDomainProfiles(values: unknown[]): DomainProfile[] {
       domain,
       zoneId,
       // Existing profiles used implicit wildcard synchronization. Keep that behavior for migrated data.
-      syncWildcard: item.syncWildcard !== false,
+      syncWildcard: isWildcardSyncEnabled(item.syncWildcard),
       ...(apiToken ? { apiToken } : {}),
     });
   }
