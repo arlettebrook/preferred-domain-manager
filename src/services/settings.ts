@@ -90,10 +90,13 @@ export async function getSettings(env: Env): Promise<Settings> {
 }
 
 export function publicSettings(settings: Settings) {
+  const profiles = domainProfiles(settings);
+  const activeDomain = profiles.find((profile) => profile.domain === settings.defaultDomain) || profiles[0];
   return {
     ipSources: settings.ipSources,
     manualIps: settings.manualIps,
-    domains: domainProfiles(settings).map(({ apiToken: _apiToken, ...profile }) => ({ ...profile, hasApiToken: Boolean(_apiToken) })),
+    domains: profiles.map(({ apiToken: _apiToken, ...profile }) => ({ ...profile, hasApiToken: Boolean(_apiToken) })),
+    activeDomainId: activeDomain?.id || "",
     adminPath: effectiveAdminPath(settings),
     defaultDomain: settings.defaultDomain ?? "",
     cfZoneId: settings.cfZoneId ?? "",

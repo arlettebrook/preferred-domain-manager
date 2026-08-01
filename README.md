@@ -193,7 +193,7 @@ npm run deploy
 - `PUT /api/dns/records/:id`：编辑 DNS 记录。
 - `DELETE /api/dns/records/:id`：删除 DNS 记录。
 - `POST /api/ips/preview`：抓取来源、合并并执行 TCP 443 检测。
-- `POST /api/sync`：执行默认 Zone 的 DNS Diff Update。
+- `POST /api/sync`：执行当前域名或全部已配置域名的 DNS Diff Update；批量同步会返回每个域名的成功/失败结果，单个域名失败不会阻断其他域名。
 - `POST /api/auth/logout`：注销会话。
 - `POST /api/telegram/test`：测试 Telegram Bot Token。
 - `POST /api/telegram/webhook` / `DELETE /api/telegram/webhook`：设置或删除 Telegram Webhook。

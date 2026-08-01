@@ -140,7 +140,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {
-      return json({ ok: true, ...(await runSync(env, url.searchParams.get("domainId") || undefined)) });
+      return json(await runSync(env, url.searchParams.get("domainId") || undefined));
     } catch (error) {
       if (error instanceof LockBusyError) return json({ ok: false, error: error.message }, 409);
       throw error;

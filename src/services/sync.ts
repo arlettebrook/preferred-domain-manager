@@ -1,7 +1,7 @@
 import { SYNC_LOCK_NAME } from "../config";
 import { LockBusyError, HttpError } from "../errors";
 import { collectPreferredIps } from "./ip-sources";
-import { effectiveApiToken, effectiveTarget, getSettings } from "./settings";
+import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { Env } from "../types";
 import { syncZone } from "./cloudflare-dns";
 
@@ -19,13 +19,40 @@ export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise
 export async function runSync(env: Env, domainId?: string) {
   return withSyncLock(env, async () => {
     const settings = await getSettings(env);
-    const target = effectiveTarget(settings, domainId);
-    if (!target) throw new HttpError(400, "没有配置默认域名或 Zone ID");
-    const apiToken = effectiveApiToken(settings, domainId);
-    if (!apiToken) throw new HttpError(400, `域名 ${target.domain} 尚未配置 Cloudflare API Token`);
+    const profiles = domainProfiles(settings);
+    const targets = domainId
+      ? (() => {
+          const target = effectiveTarget(settings, domainId);
+          return target ? [{ id: domainId, target }] : [];
+        })()
+      : profiles.map((profile) => ({
+          id: profile.id,
+          target: { zoneId: profile.zoneId, domain: profile.domain, syncWildcard: profile.syncWildcard !== false },
+        }));
+    if (!targets.length) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "没有配置默认域名或 Zone ID");
     const collected = await collectPreferredIps(settings, true);
     if (!collected.reachable.length) throw new HttpError(502, "没有通过 TCP 443 检测的优选 IP，已停止同步以保护现有 DNS 记录");
-    const result = await syncZone(target, collected.reachable, env, apiToken);
-    return { at: new Date().toISOString(), candidates: collected.merged.length, reachable: collected.reachable, sources: collected.sources, result };
+    const results: Array<{ id: string; domain: string; ok: boolean; result?: Awaited<ReturnType<typeof syncZone>>; error?: string }> = [];
+    for (const entry of targets) {
+      try {
+        const apiToken = effectiveApiToken(settings, entry.id);
+        if (!apiToken) throw new HttpError(400, `域名 ${entry.target.domain} 尚未配置 Cloudflare API Token`);
+        results.push({ id: entry.id, domain: entry.target.domain, ok: true, result: await syncZone(entry.target, collected.reachable, env, apiToken) });
+      } catch (error) {
+        if (domainId) throw error;
+        results.push({ id: entry.id, domain: entry.target.domain, ok: false, error: error instanceof Error ? error.message : "同步失败" });
+      }
+    }
+    const succeeded = results.filter((entry) => entry.ok);
+    const failed = results.filter((entry) => !entry.ok);
+    return {
+      ok: failed.length === 0,
+      at: new Date().toISOString(),
+      candidates: collected.merged.length,
+      reachable: collected.reachable,
+      sources: collected.sources,
+      result: domainId ? succeeded[0]?.result : results.length === 1 ? results[0] : results,
+      results,
+    };
   });
 }
