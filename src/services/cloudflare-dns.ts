@@ -216,7 +216,9 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
     }
     seen.add(`${record.name}:${key}`);
     if (record.proxied) {
-      patches.push({ id: record.id, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] });
+      // Some Cloudflare plans have a DNS record tag quota of 0. Keep the
+      // managed marker in the supported comment field and never send tags.
+      patches.push({ id: record.id, proxied: false, comment: MANAGED_COMMENT });
       unproxied++;
     } else kept++;
   }
@@ -226,7 +228,7 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
       const type = isIPv4(ip) ? "A" : "AAAA";
       const key = `${name}:${type}:${ip}`;
       if (seen.has(key)) continue;
-      posts.push({ type, name, content: ip, ttl: DNS_TTL, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] });
+      posts.push({ type, name, content: ip, ttl: DNS_TTL, proxied: false, comment: MANAGED_COMMENT });
       seen.add(key);
       created++;
     }
