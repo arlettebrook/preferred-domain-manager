@@ -12,6 +12,7 @@ import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegra
 
 function normalizeIpSources(input: unknown, fallback: IpSource[]) {
   const sources = Array.isArray(input) ? input : fallback;
+  const seen = new Set<string>();
   return sources.map((item) => {
     const source = item && typeof item === "object" ? item as Partial<IpSource> : {};
     return {
@@ -19,7 +20,12 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
       url: String(source.url || "").trim(),
       enabled: source.enabled !== false,
     };
-  }).filter((source) => /^https?:\/\//i.test(source.url));
+  }).filter((source) => {
+    const key = source.url.toLowerCase();
+    if (!/^https?:\/\//i.test(source.url) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function requireAuth(request: Request, env: Env) {

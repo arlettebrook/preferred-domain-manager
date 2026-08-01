@@ -1,5 +1,5 @@
 import { connect } from "cloudflare:sockets";
-import { MAX_SOURCE_ITEMS } from "../config";
+import { MAX_SOURCE_ITEMS, MAX_TCP_CHECK_ITEMS, TCP_CHECK_CONCURRENCY, TCP_CHECK_TIMEOUT_MS } from "../config";
 import { CollectedIps, IpSource, Settings, SourceResult } from "../types";
 import { dedupeIps, isIPv4, normalizeIp, validIp } from "../validation";
 
@@ -55,7 +55,7 @@ async function tcp443Reachable(ip: string) {
   let socket: ReturnType<typeof connect> | undefined;
   try {
     socket = connect({ hostname: ip, port: 443 });
-    await Promise.race([socket.opened, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4500))]);
+    await Promise.race([socket.opened, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), TCP_CHECK_TIMEOUT_MS))]);
     return true;
   } catch {
     return false;
@@ -65,28 +65,35 @@ async function tcp443Reachable(ip: string) {
 }
 
 async function filterReachable(ips: string[]) {
+  const candidates = ips.slice(0, MAX_TCP_CHECK_ITEMS);
   const reachable: string[] = [];
   let cursor = 0;
   const worker = async () => {
-    while (cursor < ips.length) {
-      const current = ips[cursor++];
+    while (cursor < candidates.length) {
+      const current = candidates[cursor++];
       if (await tcp443Reachable(current)) reachable.push(current);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(20, Math.max(1, ips.length)) }, worker));
-  return reachable.sort((left, right) => (isIPv4(left) === isIPv4(right) ? left.localeCompare(right) : isIPv4(left) ? -1 : 1));
+  await Promise.all(Array.from({ length: Math.min(TCP_CHECK_CONCURRENCY, Math.max(1, candidates.length)) }, worker));
+  return {
+    ips: reachable.sort((left, right) => (isIPv4(left) === isIPv4(right) ? left.localeCompare(right) : isIPv4(left) ? -1 : 1)),
+    checkedCount: candidates.length,
+    skippedCount: Math.max(0, ips.length - candidates.length),
+  };
 }
 
 export async function collectPreferredIps(settings: Settings, checkTcp = true): Promise<CollectedIps> {
   const sourceResults = await Promise.all(settings.ipSources.map(fetchSource));
   const sourceIps = dedupeIps(sourceResults.flatMap((item) => item.ips));
   const merged = dedupeIps([...settings.manualIps, ...sourceIps]);
-  const reachable = checkTcp ? await filterReachable(merged) : merged;
+  const reachability = checkTcp ? await filterReachable(merged) : { ips: merged, checkedCount: 0, skippedCount: 0 };
   return {
     checkedTcp: checkTcp,
+    checkedCount: reachability.checkedCount,
+    skippedCount: reachability.skippedCount,
     sourceIps,
     merged,
-    reachable,
-    sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, count: ips.length, error })),
+    reachable: reachability.ips,
+    sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, enabled: source.enabled, count: ips.length, error })),
   };
 }
