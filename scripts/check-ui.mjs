@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const file = new URL("../src/ui/pages.ts", import.meta.url);
+const file = new URL("../src/ui/admin-page.ts", import.meta.url);
 const source = readFileSync(file, "utf8");
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
 
