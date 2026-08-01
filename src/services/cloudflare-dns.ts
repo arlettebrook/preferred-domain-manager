@@ -47,6 +47,43 @@ function equivalentDnsContent(left: string, right: string) {
   return left.trim().toLowerCase().replace(/\.$/, "") === right.trim().toLowerCase().replace(/\.$/, "");
 }
 
+function sortDnsRecords(records: DnsRecord[]) {
+  return records.sort((left, right) => left.name.localeCompare(right.name) || left.type.localeCompare(right.type) || left.content.localeCompare(right.content));
+}
+
+async function listDnsRecordsByNames(zone: DnsTarget, names: Set<string>, env: Env, globalApiToken?: string) {
+  const records = (await Promise.all([...names].map(async (name) => {
+    const result = await cfFetch<DnsRecord[] | undefined>(zone, `/zones/${zone.zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=1000`, {}, env, globalApiToken);
+    return result ?? [];
+  }))).flat();
+  return sortDnsRecords([...new Map(records.map((record) => [record.id, record])).values()]);
+}
+
+async function applyDnsBatch(
+  zone: DnsTarget,
+  changes: { deletes: Array<{ id: string }>; patches: Array<Record<string, unknown>>; posts: Array<Record<string, unknown>> },
+  env: Env,
+  globalApiToken?: string,
+) {
+  const send = async (batch: typeof changes) => {
+    if (!batch.deletes.length && !batch.patches.length && !batch.posts.length) return;
+    await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/batch`, {
+      method: "POST",
+      body: JSON.stringify(batch),
+    }, env, globalApiToken);
+  };
+  const batchSize = 500;
+  for (let start = 0; start < changes.deletes.length; start += batchSize) {
+    await send({ deletes: changes.deletes.slice(start, start + batchSize), patches: [], posts: [] });
+  }
+  for (let start = 0; start < changes.patches.length; start += batchSize) {
+    await send({ deletes: [], patches: changes.patches.slice(start, start + batchSize), posts: [] });
+  }
+  for (let start = 0; start < changes.posts.length; start += batchSize) {
+    await send({ deletes: [], patches: [], posts: changes.posts.slice(start, start + batchSize) });
+  }
+}
+
 async function removeConflictingRecords(
   zone: DnsTarget,
   names: string[],
@@ -75,7 +112,7 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
     records.push(...pageRecords);
     if (pageRecords.length < 100) break;
   }
-  return records.sort((left, right) => left.name.localeCompare(right.name) || left.type.localeCompare(right.type) || left.content.localeCompare(right.content));
+  return sortDnsRecords(records);
 }
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
@@ -155,7 +192,7 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
   const names = shouldSyncWildcard(zone) ? new Set([domain, `*.${domain}`]) : new Set([domain]);
-  const allRecords = await listDnsRecords(zone, env, globalApiToken);
+  const allRecords = await listDnsRecordsByNames(zone, names, env, globalApiToken);
   const cnameNames = new Set(allRecords.filter((record) => names.has(record.name) && record.type === "CNAME").map((record) => record.name));
   const hasPairedCname = cnameNames.size > 0;
   if (hasPairedCname) return { domain, created: 0, deleted: 0, kept: 0, unproxied: 0, total: 0, skippedCname: true };
@@ -163,6 +200,9 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
   const existing = (await listManagedRecords(zone, env, globalApiToken, allRecords)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
+  const deletes: Array<{ id: string }> = [];
+  const patches: Array<Record<string, unknown>> = [];
+  const posts: Array<Record<string, unknown>> = [];
   let created = 0, deleted = 0, kept = 0, unproxied = 0;
   const seen = new Set<string>();
 
@@ -170,13 +210,13 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
     const key = `${record.type}:${record.content}`;
     const desiredForName = desired.get(record.name) ?? new Set<string>();
     if (!desiredForName.has(key) || seen.has(`${record.name}:${key}`)) {
-      await cfFetch(zone, `/zones/${zone.zoneId}/dns_records/${record.id}`, { method: "DELETE" }, env, globalApiToken);
+      deletes.push({ id: record.id });
       deleted++;
       continue;
     }
     seen.add(`${record.name}:${key}`);
     if (record.proxied) {
-      await cfFetch(zone, `/zones/${zone.zoneId}/dns_records/${record.id}`, { method: "PATCH", body: JSON.stringify({ proxied: false, comment: MANAGED_COMMENT }) }, env, globalApiToken);
+      patches.push({ id: record.id, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] });
       unproxied++;
     } else kept++;
   }
@@ -186,10 +226,11 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
       const type = isIPv4(ip) ? "A" : "AAAA";
       const key = `${name}:${type}:${ip}`;
       if (seen.has(key)) continue;
-      await cfFetch(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify({ type, name, content: ip, ttl: DNS_TTL, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] }) }, env, globalApiToken);
+      posts.push({ type, name, content: ip, ttl: DNS_TTL, proxied: false, comment: MANAGED_COMMENT, tags: [MANAGED_COMMENT] });
       seen.add(key);
       created++;
     }
   }
+  await applyDnsBatch(zone, { deletes, patches, posts }, env, globalApiToken);
   return { domain, created, deleted, kept, unproxied, total: ips.length * namesToSync.size, skippedCname: hasPairedCname };
 }
