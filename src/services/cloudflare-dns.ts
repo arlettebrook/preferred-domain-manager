@@ -151,30 +151,6 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
   if (pairedWildcard) await deleteRecord(zone, pairedWildcard.id, env, globalApiToken);
 }
 
-export async function restoreDnsRecords(zone: DnsTarget, snapshot: Array<Pick<DnsRecord, "type" | "name" | "content" | "comment" | "tags" | "priority">>, env: Env, globalApiToken?: string) {
-  const current = await listDnsRecords(zone, env, globalApiToken);
-  for (const record of current.filter((item) => isEditableDnsRecord(zone, item))) {
-    await deleteRecord(zone, record.id, env, globalApiToken);
-  }
-  for (const record of snapshot) {
-    if (!isEditableDnsRecord(zone, record as DnsRecord)) continue;
-    await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, {
-      method: "POST",
-      body: JSON.stringify({
-        type: record.type,
-        name: record.name,
-        content: record.content,
-        ttl: DNS_TTL,
-        proxied: false,
-        ...(record.comment == null ? {} : { comment: record.comment }),
-        ...(record.tags == null ? {} : { tags: record.tags }),
-        ...(record.priority == null ? {} : { priority: record.priority }),
-      }),
-    }, env, globalApiToken);
-  }
-  return listDnsRecords(zone, env, globalApiToken);
-}
-
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");

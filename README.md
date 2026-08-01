@@ -159,8 +159,6 @@ ADMIN_PASSWORD=change-me
 SESSION_SECRET=local-development-secret
 ```
 
-管理后台会话使用 `SESSION_SECRET` 签名；生产环境请使用独立的随机长字符串，不要与 `ADMIN_PASSWORD` 共用。登录失败达到 8 次后，同一来源会被限制 15 分钟。生产环境部署后建议使用 `wrangler secret put ADMIN_PASSWORD` 和 `wrangler secret put SESSION_SECRET` 保存敏感配置。
-
 启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`；IP 来源在仪表盘中配置。Telegram Bot 需要在“全局设置”中配置。
 
 如果需要绕过 GitHub 连接直接从本地发布：

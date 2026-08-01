@@ -24,18 +24,6 @@ export async function createSession(secret: string) {
   return `${payload}.${bytesToBase64Url(await hmac(payload, secret))}`;
 }
 
-export async function verifyPassword(value: string, expected: string) {
-  const [actual, target] = await Promise.all([
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(expected)),
-  ]);
-  const actualBytes = new Uint8Array(actual);
-  const targetBytes = new Uint8Array(target);
-  let mismatch = 0;
-  for (let index = 0; index < targetBytes.length; index++) mismatch |= actualBytes[index] ^ targetBytes[index];
-  return mismatch === 0;
-}
-
 export async function isValidSession(request: Request, env: Env) {
   const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
   if (!secret) return false;
@@ -61,7 +49,6 @@ export function sessionCookie(value: string, request: Request) {
   return `${SESSION_COOKIE}=${value}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Strict${secure}`;
 }
 
-export function expiredCookie(request?: Request) {
-  const secure = request && new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  return `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict${secure}`;
+export function expiredCookie() {
+  return `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict`;
 }
