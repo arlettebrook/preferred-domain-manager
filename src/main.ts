@@ -23,7 +23,7 @@ export default {
       if (requestPath !== "/") return Response.redirect(new URL("/", request.url), 302);
       return html(landingPage(url.host, adminPath));
     } catch (error) {
-      if (error instanceof HttpError) return json({ error: error.message }, error.status);
+      if (error instanceof HttpError) return json({ error: error.message }, error.status, error.headers);
       console.error(error);
       return json({ error: "服务器内部错误" }, 500);
     }

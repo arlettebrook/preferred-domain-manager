@@ -1,8 +1,8 @@
-import { SYNC_LOCK_NAME } from "../config";
+import { SYNC_LOCK_NAME, SYNC_STATE_KEY } from "../config";
 import { LockBusyError, HttpError } from "../errors";
 import { collectPreferredIps } from "./ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
-import { Env } from "../types";
+import { Env, SyncState } from "../types";
 import { syncZone } from "./cloudflare-dns";
 
 export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise<T> {
@@ -17,7 +17,7 @@ export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise
 }
 
 export async function runSync(env: Env, domainId?: string) {
-  return withSyncLock(env, async () => {
+  const result = await withSyncLock(env, async () => {
     const settings = await getSettings(env);
     const profiles = domainProfiles(settings);
     const targets = domainId
@@ -55,4 +55,14 @@ export async function runSync(env: Env, domainId?: string) {
       results,
     };
   });
+  const state: SyncState = {
+    at: result.at,
+    ok: result.ok,
+    candidates: result.candidates,
+    reachable: result.reachable.length,
+    domains: result.results.length,
+    failed: result.results.filter((entry) => !entry.ok).length,
+  };
+  await env.PDM_KV.put(SYNC_STATE_KEY, JSON.stringify(state));
+  return result;
 }

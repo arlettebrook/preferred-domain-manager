@@ -1,10 +1,11 @@
-import { SETTINGS_KEY } from "./config";
-import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
+import { SETTINGS_KEY, SYNC_STATE_KEY } from "./config";
+import { createSession, expiredCookie, isValidSession, sessionCookie, verifyPassword } from "./security/session";
 import { collectPreferredIps } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
-import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
-import { DomainProfile, Env, IpSource, Settings } from "./types";
+import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, restoreDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
+import { appendDnsHistory, getDnsHistory, publicDnsHistory, snapshotDnsRecords } from "./services/dns-history";
+import { DomainProfile, DnsHistoryAction, Env, IpSource, Settings, SyncState } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -12,6 +13,55 @@ import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegra
 
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
+}
+
+const LOGIN_WINDOW_SECONDS = 15 * 60;
+const LOGIN_MAX_ATTEMPTS = 8;
+
+async function loginAttemptKey(request: Request) {
+  const address = request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For") || "unknown";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(address.split(",")[0].trim()));
+  const bytes = new Uint8Array(digest);
+  return `auth:login:${Array.from(bytes.slice(0, 12), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function checkLoginLimit(request: Request, env: Env) {
+  const key = await loginAttemptKey(request);
+  const attempt = await env.PDM_KV.get<{ count: number; resetAt: number }>(key, "json");
+  const now = Math.floor(Date.now() / 1000);
+  if (!attempt || attempt.resetAt <= now) return { key, allowed: true, retryAfter: 0 };
+  return { key, allowed: attempt.count < LOGIN_MAX_ATTEMPTS, retryAfter: Math.max(1, attempt.resetAt - now) };
+}
+
+async function recordLoginFailure(key: string, env: Env) {
+  const now = Math.floor(Date.now() / 1000);
+  const previous = await env.PDM_KV.get<{ count: number; resetAt: number }>(key, "json");
+  const count = previous && previous.resetAt > now ? previous.count + 1 : 1;
+  await env.PDM_KV.put(key, JSON.stringify({ count, resetAt: now + LOGIN_WINDOW_SECONDS }), { expirationTtl: LOGIN_WINDOW_SECONDS });
+}
+
+function requireSameOrigin(request: Request) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+  const origin = request.headers.get("origin");
+  if (origin && origin !== new URL(request.url).origin) throw new HttpError(403, "请求来源无效");
+}
+
+function historyRecords(target: { domain: string; zoneId: string }, records: Awaited<ReturnType<typeof listDnsRecords>>) {
+  return snapshotDnsRecords(records.filter((record) => isEditableDnsRecord(target, record)));
+}
+
+async function saveDnsHistory(env: Env, target: { domain: string; zoneId: string }, action: DnsHistoryAction, before: Awaited<ReturnType<typeof listDnsRecords>>, after: Awaited<ReturnType<typeof listDnsRecords>>, summary: string) {
+  try {
+    await appendDnsHistory(env, target.zoneId, {
+      action,
+      domain: target.domain,
+      summary,
+      before: historyRecords(target, before),
+      after: historyRecords(target, after),
+    });
+  } catch (error) {
+    console.error("dns history write failed", error);
+  }
 }
 
 async function saveConfig(request: Request, env: Env) {
@@ -85,13 +135,59 @@ export async function handleApi(request: Request, env: Env) {
   const url = new URL(request.url);
   if (url.pathname === "/api/auth/login" && request.method === "POST") {
     const { password } = await readJson<{ password?: string }>(request);
-    if (!env.ADMIN_PASSWORD || !password || password !== env.ADMIN_PASSWORD) throw new HttpError(401, "密码错误");
+    const limit = await checkLoginLimit(request, env);
+    if (!limit.allowed) throw new HttpError(429, `登录尝试过于频繁，请 ${limit.retryAfter} 秒后再试`, { "retry-after": String(limit.retryAfter) });
+    if (!env.ADMIN_PASSWORD || !password || !(await verifyPassword(password, env.ADMIN_PASSWORD))) {
+      await recordLoginFailure(limit.key, env);
+      throw new HttpError(401, "密码错误");
+    }
+    await env.PDM_KV.delete(limit.key);
     const token = await createSession(env.SESSION_SECRET || env.ADMIN_PASSWORD);
     return json({ ok: true }, 200, { "set-cookie": sessionCookie(token, request) });
   }
-  if (url.pathname === "/api/auth/logout" && request.method === "POST") return json({ ok: true }, 200, { "set-cookie": expiredCookie() });
+  if (url.pathname === "/api/auth/logout" && request.method === "POST") return json({ ok: true }, 200, { "set-cookie": expiredCookie(request) });
   if (url.pathname === "/telegram/webhook" && request.method === "POST") throw new HttpError(404, "Telegram Webhook 路径不可通过 API 路由访问");
+  requireSameOrigin(request);
   await requireAuth(request, env);
+
+  if (url.pathname === "/api/health" && request.method === "GET") {
+    const settings = await getSettings(env);
+    const profiles = domainProfiles(settings);
+    const sync = await env.PDM_KV.get<SyncState>(SYNC_STATE_KEY, "json");
+    return json({
+      ready: profiles.length > 0 && profiles.every((profile) => Boolean(effectiveApiToken(settings, profile.id))),
+      domains: profiles.map((profile) => ({
+        id: profile.id,
+        domain: profile.domain,
+        configured: Boolean(effectiveApiToken(settings, profile.id)),
+        syncWildcard: profile.syncWildcard !== false,
+      })),
+      ipSources: settings.ipSources.filter((source) => source.enabled).length,
+      manualIps: settings.manualIps.length,
+      telegramConfigured: Boolean(settings.telegramBotToken),
+      updatedAt: settings.updatedAt,
+      sync,
+    }, 200, { "cache-control": "no-store" });
+  }
+
+  const historyRollback = url.pathname.match(/^\/api\/dns\/history\/([^/]+)\/rollback$/);
+  if (url.pathname === "/api/dns/history" || historyRollback) {
+    const settings = await getSettings(env);
+    const domainId = url.searchParams.get("domainId") || undefined;
+    const target = effectiveTarget(settings, domainId);
+    if (!target) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "请先在设置中保存默认域名和 Zone ID");
+    const entries = await getDnsHistory(env, target.zoneId);
+    if (request.method === "GET" && !historyRollback) return json({ history: publicDnsHistory(entries), domain: target.domain }, 200, { "cache-control": "no-store" });
+    if (request.method !== "POST" || !historyRollback) throw new HttpError(405, "不支持的 DNS 历史操作");
+    const entry = entries.find((item) => item.id === decodeURIComponent(historyRollback[1]));
+    if (!entry) throw new HttpError(404, "DNS 历史记录不存在");
+    const apiToken = effectiveApiToken(settings, domainId);
+    if (!apiToken) throw new HttpError(400, `域名 ${target.domain} 尚未配置 Cloudflare API Token`);
+    const before = await listDnsRecords(target, env, apiToken);
+    const after = await restoreDnsRecords(target, entry.before, env, apiToken);
+    await saveDnsHistory(env, target, "rollback", before, after, `回滚到 ${new Date(entry.at).toLocaleString("zh-CN")}`);
+    return json({ ok: true, records: after, history: publicDnsHistory(await getDnsHistory(env, target.zoneId)) });
+  }
 
   if (url.pathname === "/api/telegram/test" && request.method === "POST") {
     const settings = await getSettings(env);
@@ -124,13 +220,28 @@ export async function handleApi(request: Request, env: Env) {
     }
     if (request.method === "POST" && !dnsMatch[1]) {
       const body = await readJson<Record<string, unknown>>(request);
-      return json({ record: await createDnsRecord(target, body, env, apiToken) }, 201);
+      const before = await listDnsRecords(target, env, apiToken);
+      const record = await createDnsRecord(target, body, env, apiToken);
+      const after = await listDnsRecords(target, env, apiToken);
+      await saveDnsHistory(env, target, "create", before, after, `创建 ${record.type} ${record.name}`);
+      return json({ record }, 201);
     }
     if (request.method === "PUT" && dnsMatch[1]) {
       const body = await readJson<Record<string, unknown>>(request);
-      return json({ record: await updateDnsRecord(target, dnsMatch[1], body, env, apiToken) });
+      const before = await listDnsRecords(target, env, apiToken);
+      const record = await updateDnsRecord(target, dnsMatch[1], body, env, apiToken);
+      const after = await listDnsRecords(target, env, apiToken);
+      await saveDnsHistory(env, target, "update", before, after, `编辑 ${record.type} ${record.name}`);
+      return json({ record });
     }
-    if (request.method === "DELETE" && dnsMatch[1]) { await deleteDnsRecord(target, dnsMatch[1], env, apiToken); return json({ ok: true }); }
+    if (request.method === "DELETE" && dnsMatch[1]) {
+      const before = await listDnsRecords(target, env, apiToken);
+      const deleted = before.find((record) => record.id === dnsMatch[1]);
+      await deleteDnsRecord(target, dnsMatch[1], env, apiToken);
+      const after = await listDnsRecords(target, env, apiToken);
+      await saveDnsHistory(env, target, "delete", before, after, `删除 ${deleted?.type || "DNS"} ${deleted?.name || dnsMatch[1]}`);
+      return json({ ok: true });
+    }
     throw new HttpError(405, "不支持的 DNS 操作");
   }
 
