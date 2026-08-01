@@ -9,9 +9,13 @@ async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: st
   return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
 }
 
+function normalizeRecordName(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/\.$/, "");
+}
+
 function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectType = false) {
   const allowedTypes = new Set(["A", "AAAA", "CNAME"]);
-  const name = String(input.name ?? "").trim().toLowerCase();
+  const name = normalizeRecordName(input.name);
   const content = String(input.content ?? "").trim();
   const type = detectType ? detectDnsRecordType(content) : String(input.type ?? "").toUpperCase();
   if (!allowedTypes.has(type)) throw new HttpError(400, "不支持的 DNS 记录类型");
@@ -28,7 +32,7 @@ function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectT
 export function isEditableDnsRecord(zone: DnsTarget, record: DnsRecord) {
   const domain = normalizeDomain(zone.domain);
   const allowedNames = shouldSyncWildcard(zone) ? [domain] : [domain, `*.${domain}`];
-  return allowedNames.includes(record.name.toLowerCase()) && ["A", "AAAA", "CNAME"].includes(record.type);
+  return allowedNames.includes(normalizeRecordName(record.name)) && ["A", "AAAA", "CNAME"].includes(record.type);
 }
 
 function pairedName(zone: DnsTarget) {
