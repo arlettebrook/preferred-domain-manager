@@ -3,11 +3,32 @@ import { MAX_SOURCE_ITEMS } from "../config";
 import { CollectedIps, IpSource, Settings, SourceResult } from "../types";
 import { dedupeIps, isIPv4, normalizeIp, validIp } from "../validation";
 
+const ENDPOINT_PATTERN = /(?:^|[\s,;"'([{])(?<address>\[(?:[0-9a-f:]+)\]|(?:\d{1,3}\.){3}\d{1,3}):(?<port>\d{1,5})(?=$|[\s,;"'\]})#])/gi;
+
+function addIp(value: string, result: string[]) {
+  const ip = normalizeIp(value);
+  if (result.length < MAX_SOURCE_ITEMS && validIp(ip)) result.push(ip);
+}
+
+function collectEndpointIps(text: string, result: string[]) {
+  for (const match of text.matchAll(ENDPOINT_PATTERN)) {
+    if (match.groups?.port === "443" && match.groups.address) {
+      addIp(match.groups.address, result);
+    }
+    if (result.length >= MAX_SOURCE_ITEMS) break;
+  }
+}
+
 function collectIpStrings(value: unknown, result: string[] = []) {
   if (result.length >= MAX_SOURCE_ITEMS) return result;
   if (typeof value === "string") {
+    // Sources may return nodes such as `1.2.3.4:443#label`. Only endpoints
+    // explicitly using TCP 443 are eligible; plain IP tokens remain supported
+    // for older sources that return one IP per line.
+    collectEndpointIps(value, result);
+    if (result.length >= MAX_SOURCE_ITEMS) return result;
     const tokens = value.split(/[\s,;"'\[\]{}]+/).map(normalizeIp).filter(validIp);
-    result.push(...tokens);
+    for (const token of tokens) addIp(token, result);
   } else if (Array.isArray(value)) {
     for (const item of value) collectIpStrings(item, result);
   } else if (value && typeof value === "object") {
@@ -66,4 +87,3 @@ export async function collectPreferredIps(settings: Settings, checkTcp = true): 
     sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, count: ips.length, error })),
   };
 }
-
