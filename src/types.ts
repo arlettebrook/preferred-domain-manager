@@ -8,6 +8,7 @@ export interface Env {
 export interface DnsTarget {
   zoneId: string;
   domain: string;
+  syncWildcard?: boolean;
 }
 
 export interface IpSource {
@@ -20,6 +21,7 @@ export interface DomainProfile {
   id: string;
   domain: string;
   zoneId: string;
+  syncWildcard?: boolean;
   apiToken?: string;
   hasApiToken?: boolean;
 }
@@ -49,6 +51,7 @@ export interface DnsRecord {
   ttl?: number;
   priority?: number | null;
   data?: Record<string, unknown>;
+  editable?: boolean;
 }
 
 export interface SourceResult {

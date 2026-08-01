@@ -37,7 +37,11 @@ async function saveConfig(request: Request, env: Env) {
     const domain = normalizeDomain(String(item.domain || ""));
     const previousProfile = previousDomains.find((profile) => profile.id === item.id || profile.domain === domain);
     const apiToken = typeof item.apiToken === "string" && item.apiToken ? item.apiToken : previousProfile?.apiToken;
-    return { ...item, apiToken };
+    return {
+      ...item,
+      apiToken,
+      syncWildcard: item.syncWildcard !== undefined ? item.syncWildcard !== false : previousProfile?.syncWildcard !== false,
+    };
   });
   let domains = input.domains !== undefined
     ? domainProfiles({ domains: requestedDomains as DomainProfile[], defaultDomain: requestedDomain, cfZoneId: requestedZoneId, cfApiToken: previous.cfApiToken })
@@ -46,7 +50,7 @@ async function saveConfig(request: Request, env: Env) {
     const activeIndex = domains.findIndex((item) => item.domain === normalizeDomain(previous.defaultDomain || ""));
     const legacyToken = typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken;
     if (activeIndex >= 0) domains[activeIndex] = { ...domains[activeIndex], domain: requestedDomain, zoneId: requestedZoneId, ...(legacyToken ? { apiToken: legacyToken } : {}) };
-    else domains = [{ id: `domain:${requestedDomain}`, domain: requestedDomain, zoneId: requestedZoneId, ...(legacyToken ? { apiToken: legacyToken } : {}) }, ...domains];
+    else domains = [{ id: `domain:${requestedDomain}`, domain: requestedDomain, zoneId: requestedZoneId, syncWildcard: true, ...(legacyToken ? { apiToken: legacyToken } : {}) }, ...domains];
   }
   const missingToken = domains.find((profile) => !profile.apiToken);
   if (missingToken) throw new HttpError(400, `请为 ${missingToken.domain} 配置独立的 Cloudflare API Token`);
@@ -114,7 +118,10 @@ export async function handleApi(request: Request, env: Env) {
     if (!target) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "请先在设置中保存默认域名和 Zone ID");
     const apiToken = effectiveApiToken(settings, domainId);
     if (!apiToken) throw new HttpError(400, `域名 ${target.domain} 尚未配置 Cloudflare API Token`);
-    if (request.method === "GET" && !dnsMatch[1]) return json({ records: (await listDnsRecords(target, env, apiToken)).filter((record) => isEditableDnsRecord(target, record)), domain: target.domain }, 200, { "cache-control": "no-store" });
+    if (request.method === "GET" && !dnsMatch[1]) {
+      const records = await listDnsRecords(target, env, apiToken);
+      return json({ records: records.map((record) => ({ ...record, editable: isEditableDnsRecord(target, record) })), domain: target.domain, syncWildcard: target.syncWildcard }, 200, { "cache-control": "no-store" });
+    }
     if (request.method === "POST" && !dnsMatch[1]) {
       const body = await readJson<Record<string, unknown>>(request);
       return json({ record: await createDnsRecord(target, body, env, apiToken) }, 201);

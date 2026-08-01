@@ -21,7 +21,14 @@ function normalizeDomainProfiles(values: unknown[]): DomainProfile[] {
     if (ids.has(id)) id = profileId(domain);
     seen.add(domain);
     ids.add(id);
-    profiles.push({ id, domain, zoneId, ...(apiToken ? { apiToken } : {}) });
+    profiles.push({
+      id,
+      domain,
+      zoneId,
+      // Existing profiles used implicit wildcard synchronization. Keep that behavior for migrated data.
+      syncWildcard: item.syncWildcard !== false,
+      ...(apiToken ? { apiToken } : {}),
+    });
   }
   return profiles;
 }
@@ -30,7 +37,7 @@ export function domainProfiles(settings: Pick<Settings, "domains" | "defaultDoma
   const configured = Array.isArray(settings.domains) ? settings.domains : [];
   if (configured.length) return normalizeDomainProfiles(configured);
   if (settings.defaultDomain && settings.cfZoneId) {
-    return normalizeDomainProfiles([{ id: profileId(settings.defaultDomain), domain: settings.defaultDomain, zoneId: settings.cfZoneId, apiToken: settings.cfApiToken }]);
+    return normalizeDomainProfiles([{ id: profileId(settings.defaultDomain), domain: settings.defaultDomain, zoneId: settings.cfZoneId, syncWildcard: true, apiToken: settings.cfApiToken }]);
   }
   return [];
 }
@@ -101,10 +108,10 @@ export function publicSettings(settings: Settings) {
 export function effectiveTarget(settings: Settings, domainId?: string): DnsTarget | undefined {
   const profiles = domainProfiles(settings);
   const profile = domainId ? profiles.find((item) => item.id === domainId) : profiles.find((item) => item.domain === settings.defaultDomain) || profiles[0];
-  if (profile) return { zoneId: profile.zoneId, domain: profile.domain };
+  if (profile) return { zoneId: profile.zoneId, domain: profile.domain, syncWildcard: profile.syncWildcard !== false };
   if (domainId) return undefined;
   if (!settings.defaultDomain || !settings.cfZoneId) return undefined;
-  return { zoneId: settings.cfZoneId, domain: settings.defaultDomain };
+  return { zoneId: settings.cfZoneId, domain: settings.defaultDomain, syncWildcard: true };
 }
 
 export function effectiveApiToken(settings: Settings, domainId?: string) {

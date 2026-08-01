@@ -67,8 +67,9 @@ interface RecordSelection {
 }
 
 function targetFromSettings(settings: Settings) {
-  if (!settings.defaultDomain || !settings.cfZoneId) throw new HttpError(400, "后台尚未配置默认域名和 Zone ID");
-  return { domain: settings.defaultDomain, zoneId: settings.cfZoneId };
+  const target = effectiveTarget(settings);
+  if (!target) throw new HttpError(400, "后台尚未配置默认域名和 Zone ID");
+  return target;
 }
 
 function allowed(settings: Settings, userId: number) {

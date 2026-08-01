@@ -9,9 +9,9 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
-- DNS 编辑只允许操作默认域名的 `A`、`AAAA`、`CNAME` 记录；新增或编辑主域名记录会自动新增或同步对应泛记录。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。CNAME 会清理主域名和泛域名两侧冲突的 A/AAAA 记录，存在成对 CNAME 时优选 IP 同步会跳过这两个名称。
+- DNS 编辑会展示当前 Zone 的全部记录；仅允许操作主域名的 `A`、`AAAA`、`CNAME`，其他记录以只读方式展示。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
-- 同步根域名和 `*.域名`，记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
+- 每个域名可独立设置“同步泛域名”开关：开启时同步根域名和 `*.域名`，关闭时只同步根域名且保留已有泛记录；记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
 - Cron 自动同步与管理员手动同步共用 Durable Object 锁。
 - 暗黑模式。
 - Telegram Bot DNS 管理：白名单用户可通过内联键盘查看、新建、修改和删除 DNS 记录，也兼容文本命令。
@@ -97,6 +97,7 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 - `CF_API_TOKEN`：Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
 - `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
 - `CF_ZONE_ID`：Cloudflare Zone ID。
+- “同步泛域名”：开启后主域名 DNS 编辑及优选 IP 同步会联动更新 `*.域名`，关闭后只处理主域名。
 - `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
 - Telegram Bot Token、Webhook Secret 和 Telegram 用户 ID 白名单：在“Telegram Bot”区域编辑。Token 和 Secret 留空表示保持原值。
 
@@ -187,7 +188,7 @@ npm run deploy
 登录后可调用：
 
 - `GET /api/config` / `PUT /api/config`：读取/保存默认域名、Zone、来源和手动 IP。
-- `GET /api/dns/records`：读取默认 Zone 的全部 DNS 记录。
+- `GET /api/dns/records`：读取当前 Zone 的全部 DNS 记录，并标记可编辑记录。
 - `POST /api/dns/records`：新建 DNS 记录。
 - `PUT /api/dns/records/:id`：编辑 DNS 记录。
 - `DELETE /api/dns/records/:id`：删除 DNS 记录。
@@ -199,4 +200,4 @@ npm run deploy
 - `POST /api/telegram/commands`：同步 Telegram Bot 菜单命令。
 - `POST /telegram/webhook`：Telegram 回调入口，由 Telegram 调用，不需要管理员 Cookie。
 
-后台仪表盘集中提供 Cloudflare 连接、IP 来源、优选 IP 操作和 DNS 编辑；DNS 区域支持搜索、刷新、新建、编辑和删除主域名记录，并自动同步对应泛记录。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
+后台仪表盘集中提供 Cloudflare 连接、IP 来源、优选 IP 操作和 DNS 编辑；DNS 区域支持搜索、刷新和查看当前 Zone 的全部记录，并对主域名的 A、AAAA、CNAME 提供编辑/删除。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
