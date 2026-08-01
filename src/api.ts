@@ -10,6 +10,18 @@ import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
 import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./services/telegram";
 
+function normalizeIpSources(input: unknown, fallback: IpSource[]) {
+  const sources = Array.isArray(input) ? input : fallback;
+  return sources.map((item) => {
+    const source = item && typeof item === "object" ? item as Partial<IpSource> : {};
+    return {
+      id: String(source.id || crypto.randomUUID()),
+      url: String(source.url || "").trim(),
+      enabled: source.enabled !== false,
+    };
+  }).filter((source) => /^https?:\/\//i.test(source.url));
+}
+
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
 }
@@ -55,11 +67,7 @@ async function saveConfig(request: Request, env: Env) {
   const missingToken = domains.find((profile) => !profile.apiToken);
   if (missingToken) throw new HttpError(400, `请为 ${missingToken.domain} 配置独立的 Cloudflare API Token`);
   const activeDomain = domains.find((item) => item.domain === requestedDomain) || domains[0];
-  const ipSources = (input.ipSources ?? previous.ipSources ?? []).map((source) => ({
-    id: String(source.id || crypto.randomUUID()),
-    url: String(source.url || "").trim(),
-    enabled: source.enabled !== false,
-  })).filter((source) => /^https?:\/\//i.test(source.url));
+  const ipSources = normalizeIpSources(input.ipSources, previous.ipSources ?? []);
   const settings: Settings = {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
@@ -78,6 +86,17 @@ async function saveConfig(request: Request, env: Env) {
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
+  return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
+}
+
+async function saveIpSources(request: Request, env: Env) {
+  const input = await readJson<{ ipSources?: unknown }>(request);
+  if (!Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
+  const previous = await getSettings(env);
+  const settings: Settings = { ...previous, ipSources: normalizeIpSources(input.ipSources, []), updatedAt: new Date().toISOString() };
+  await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+  const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
+  if (!persisted) throw new HttpError(500, "IP 来源写入 KV 后无法读取，请检查 PDM_KV 绑定");
   return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
 }
 
@@ -137,6 +156,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
   if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
+  if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {

@@ -71,8 +71,8 @@ async function deleteRecord(zone: DnsTarget, id: string, env: Env, globalApiToke
 export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
   const records: DnsRecord[] = [];
   for (let page = 1; page <= 100; page++) {
-    const pageRecords = await cfFetch<DnsRecord[]>(zone, `/zones/${zone.zoneId}/dns_records?per_page=100&page=${page}`, {}, env, globalApiToken);
-    records.push(...(pageRecords ?? []));
+    const pageRecords = (await cfFetch<DnsRecord[] | undefined>(zone, `/zones/${zone.zoneId}/dns_records?per_page=100&page=${page}`, {}, env, globalApiToken)) ?? [];
+    records.push(...pageRecords);
     if (pageRecords.length < 100) break;
   }
   return records.sort((left, right) => left.name.localeCompare(right.name) || left.type.localeCompare(right.type) || left.content.localeCompare(right.content));
@@ -154,13 +154,12 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
-  const names = new Set([domain, `*.${domain}`]);
+  const names = shouldSyncWildcard(zone) ? new Set([domain, `*.${domain}`]) : new Set([domain]);
   const allRecords = await listDnsRecords(zone, env, globalApiToken);
   const cnameNames = new Set(allRecords.filter((record) => names.has(record.name) && record.type === "CNAME").map((record) => record.name));
   const hasPairedCname = cnameNames.size > 0;
-  const namesToSync = shouldSyncWildcard(zone) && hasPairedCname
-    ? new Set<string>()
-    : new Set([...names].filter((name) => !cnameNames.has(name)));
+  if (hasPairedCname) return { domain, created: 0, deleted: 0, kept: 0, unproxied: 0, total: 0, skippedCname: true };
+  const namesToSync = new Set(names);
   const existing = (await listManagedRecords(zone, env, globalApiToken, allRecords)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
