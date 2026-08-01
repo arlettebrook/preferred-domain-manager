@@ -1,6 +1,6 @@
-import { SETTINGS_KEY } from "./config";
+import { PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
-import { collectPreferredIps } from "./services/ip-sources";
+import { collectPreferredIps, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
@@ -90,6 +90,7 @@ async function saveConfig(request: Request, env: Env) {
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+  await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
   return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
@@ -101,6 +102,7 @@ async function saveIpSources(request: Request, env: Env) {
   const previous = await getSettings(env);
   const settings: Settings = { ...previous, ipSources: normalizeIpSources(input.ipSources, []), updatedAt: new Date().toISOString() };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+  await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "IP 来源写入 KV 后无法读取，请检查 PDM_KV 绑定");
   return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
@@ -164,7 +166,12 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
   if (url.pathname === "/api/ips/collect" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), false));
-  if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
+  if (url.pathname === "/api/ips/preview" && request.method === "POST") {
+    const settings = await getSettings(env);
+    const collected = await collectPreferredIps(settings, true);
+    await savePreferredIpSnapshot(env, settings, collected);
+    return json(collected);
+  }
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {
       return json(await runSync(env, url.searchParams.get("domainId") || undefined));

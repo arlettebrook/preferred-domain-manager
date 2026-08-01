@@ -1,6 +1,6 @@
 import { SYNC_LOCK_NAME } from "../config";
 import { LockBusyError, HttpError } from "../errors";
-import { collectPreferredIps } from "./ip-sources";
+import { getPreferredIpSnapshot } from "./ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { Env } from "../types";
 import { syncZone } from "./cloudflare-dns";
@@ -30,7 +30,9 @@ export async function runSync(env: Env, domainId?: string) {
           target: { zoneId: profile.zoneId, domain: profile.domain, syncWildcard: profile.syncWildcard !== false },
         }));
     if (!targets.length) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "没有配置默认域名或 Zone ID");
-    const collected = await collectPreferredIps(settings, true);
+    const snapshot = await getPreferredIpSnapshot(env, settings);
+    if (!snapshot) throw new HttpError(428, "优选 IP 检测结果不存在或已过期，请先点击“检测优选 IP”");
+    const collected = snapshot.collected;
     if (!collected.reachable.length) throw new HttpError(502, "没有通过 TCP 443 检测的优选 IP，已停止同步以保护现有 DNS 记录");
     const results: Array<{ id: string; domain: string; ok: boolean; result?: Awaited<ReturnType<typeof syncZone>>; error?: string }> = [];
     for (const entry of targets) {

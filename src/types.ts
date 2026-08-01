@@ -69,3 +69,9 @@ export interface CollectedIps {
   reachable: string[];
   sources: Array<{ id: string; url: string; enabled: boolean; count: number; error?: string }>;
 }
+
+export interface PreferredIpSnapshot {
+  settingsUpdatedAt: string;
+  checkedAt: string;
+  collected: CollectedIps;
+}

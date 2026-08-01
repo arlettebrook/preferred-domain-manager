@@ -1,6 +1,6 @@
 import { connect } from "cloudflare:sockets";
-import { MAX_SOURCE_ITEMS, MAX_TCP_CHECK_ITEMS, TCP_CHECK_CONCURRENCY, TCP_CHECK_TIMEOUT_MS } from "../config";
-import { CollectedIps, IpSource, Settings, SourceResult } from "../types";
+import { MAX_SOURCE_ITEMS, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, TCP_CHECK_CONCURRENCY, TCP_CHECK_TIMEOUT_MS } from "../config";
+import { CollectedIps, Env, IpSource, PreferredIpSnapshot, Settings, SourceResult } from "../types";
 import { dedupeIps, isIPv4, normalizeIp, validIp } from "../validation";
 
 const ENDPOINT_PATTERN = /(?:^|[\s,;"'([{])(?<address>\[(?:[0-9a-f:]+)\]|(?:\d{1,3}\.){3}\d{1,3}):(?<port>\d{1,5})(?=$|[\s,;"'\]})#])/gi;
@@ -96,4 +96,22 @@ export async function collectPreferredIps(settings: Settings, checkTcp = true): 
     reachable: reachability.ips,
     sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, enabled: source.enabled, count: ips.length, error })),
   };
+}
+
+export async function savePreferredIpSnapshot(env: Env, settings: Settings, collected: CollectedIps) {
+  const snapshot: PreferredIpSnapshot = {
+    settingsUpdatedAt: settings.updatedAt,
+    checkedAt: new Date().toISOString(),
+    collected,
+  };
+  await env.PDM_KV.put(PREFERRED_IP_CACHE_KEY, JSON.stringify(snapshot));
+  return snapshot;
+}
+
+export async function getPreferredIpSnapshot(env: Env, settings: Settings) {
+  const snapshot = await env.PDM_KV.get<PreferredIpSnapshot>(PREFERRED_IP_CACHE_KEY, "json");
+  if (!snapshot || snapshot.settingsUpdatedAt !== settings.updatedAt || !snapshot.collected?.checkedTcp) return undefined;
+  const checkedAt = Date.parse(snapshot.checkedAt);
+  if (!Number.isFinite(checkedAt) || Date.now() - checkedAt > PREFERRED_IP_CACHE_TTL_MS) return undefined;
+  return snapshot;
 }
