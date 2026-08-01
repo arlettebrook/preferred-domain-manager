@@ -51,7 +51,7 @@ async function fetchSource(source: IpSource): Promise<SourceResult> {
   }
 }
 
-async function tcp443Reachable(ip: string) {
+export async function isTcp443Reachable(ip: string) {
   let socket: ReturnType<typeof connect> | undefined;
   try {
     socket = connect({ hostname: ip, port: 443 });
@@ -71,7 +71,7 @@ async function filterReachable(ips: string[]) {
   const worker = async () => {
     while (cursor < candidates.length) {
       const current = candidates[cursor++];
-      if (await tcp443Reachable(current)) reachable.push(current);
+      if (await isTcp443Reachable(current)) reachable.push(current);
     }
   };
   await Promise.all(Array.from({ length: Math.min(TCP_CHECK_CONCURRENCY, Math.max(1, candidates.length)) }, worker));

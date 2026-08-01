@@ -3,14 +3,24 @@ import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
 import { detectDnsRecordType, isIPv4, isIPv6, normalizeDomain } from "../validation";
 import { cloudflareFetch as cfFetch } from "../integrations/cloudflare/client";
-
-async function listManagedRecords(zone: DnsTarget, env: Env, globalApiToken?: string, source?: DnsRecord[]) {
-  const records = source ?? await listDnsRecords(zone, env, globalApiToken);
-  return records.filter((record) => record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT));
-}
+import { isTcp443Reachable } from "./ip-sources";
 
 function normalizeRecordName(value: unknown) {
   return String(value ?? "").trim().toLowerCase().replace(/\.$/, "");
+}
+
+function sameRecordName(left: unknown, right: unknown) {
+  return normalizeRecordName(left) === normalizeRecordName(right);
+}
+
+function isManagedRecord(record: DnsRecord) {
+  return record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT);
+}
+
+async function ensureTcp443Reachable(type: string, content: string) {
+  if ((type === "A" || type === "AAAA") && !(await isTcp443Reachable(content))) {
+    throw new HttpError(422, `${content} 未通过 TCP 443 检测，不能绑定到 DNS`);
+  }
 }
 
 function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectType = false) {
@@ -94,7 +104,7 @@ async function removeConflictingRecords(
 ) {
   const records = await listDnsRecords(zone, env, globalApiToken);
   const conflictingTypes = type === "CNAME" ? new Set(["A", "AAAA", "CNAME"]) : new Set(["CNAME"]);
-  const removed = records.filter((record) => names.includes(record.name) && conflictingTypes.has(record.type) && !exceptIds.includes(record.id));
+  const removed = records.filter((record) => names.some((name) => sameRecordName(record.name, name)) && conflictingTypes.has(record.type) && !exceptIds.includes(record.id));
   for (const record of removed) {
     await cfFetch<unknown>(zone, `/zones/${zone.zoneId}/dns_records/${encodeURIComponent(record.id)}`, { method: "DELETE" }, env, globalApiToken);
   }
@@ -117,14 +127,15 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   const validated = validateRecordInput(zone, input);
+  await ensureTcp443Reachable(validated.type, validated.content);
   const recordsBeforeChange = await listDnsRecords(zone, env, globalApiToken);
-  const duplicateRoot = recordsBeforeChange.find((record) => record.name === validated.name && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
+  const duplicateRoot = recordsBeforeChange.find((record) => sameRecordName(record.name, validated.name) && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
   if (duplicateRoot) throw new HttpError(409, `${validated.type} 记录已经存在：${duplicateRoot.content}`);
   const wildcard = pairedName(zone);
   const pairedNames = shouldSyncWildcard(zone) ? [validated.name, wildcard] : [validated.name];
   await removeConflictingRecords(zone, pairedNames, validated.type, env, globalApiToken);
   const existingWildcard = shouldSyncWildcard(zone)
-    ? (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.name === wildcard && record.type === validated.type && equivalentDnsContent(record.content, validated.content))
+    ? (await listDnsRecords(zone, env, globalApiToken)).find((record) => sameRecordName(record.name, wildcard) && record.type === validated.type && equivalentDnsContent(record.content, validated.content))
     : undefined;
   const root = await cfFetch<DnsRecord>(zone, `/zones/${zone.zoneId}/dns_records`, { method: "POST", body: JSON.stringify(validated) }, env, globalApiToken);
   if (!shouldSyncWildcard(zone) || existingWildcard) return root;
@@ -146,12 +157,13 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   if (!current) throw new HttpError(404, "DNS 记录不存在");
   if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑主域名或泛域名的 A、AAAA、CNAME 记录");
   const validated = validateRecordInput(zone, input, true);
+  await ensureTcp443Reachable(validated.type, validated.content);
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
-  const duplicateRoot = records.find((record) => record.id !== id && record.name === validated.name && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
+  const duplicateRoot = records.find((record) => record.id !== id && sameRecordName(record.name, validated.name) && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
   if (duplicateRoot) throw new HttpError(409, `${validated.type} 记录已经存在：${duplicateRoot.content}`);
   const pairedWildcard = shouldSyncWildcard(zone)
-    ? records.find((record) => record.name === wildcard && record.type === current.type && equivalentDnsContent(record.content, current.content))
+    ? records.find((record) => sameRecordName(record.name, wildcard) && record.type === current.type && equivalentDnsContent(record.content, current.content))
     : undefined;
   const exceptIds = [id, ...(pairedWildcard ? [pairedWildcard.id] : [])];
   await removeConflictingRecords(zone, shouldSyncWildcard(zone) ? [validated.name, wildcard] : [validated.name], validated.type, env, globalApiToken, exceptIds);
@@ -182,7 +194,7 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
   const pairedWildcard = shouldSyncWildcard(zone)
-    ? records.find((record) => record.name === wildcard && record.type === current.type && equivalentDnsContent(record.content, current.content))
+    ? records.find((record) => sameRecordName(record.name, wildcard) && record.type === current.type && equivalentDnsContent(record.content, current.content))
     : undefined;
   await deleteRecord(zone, id, env, globalApiToken);
   if (pairedWildcard) await deleteRecord(zone, pairedWildcard.id, env, globalApiToken);
@@ -193,33 +205,48 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
   const names = shouldSyncWildcard(zone) ? new Set([domain, `*.${domain}`]) : new Set([domain]);
   const allRecords = await listDnsRecordsByNames(zone, names, env, globalApiToken);
-  const cnameNames = new Set(allRecords.filter((record) => names.has(record.name) && record.type === "CNAME").map((record) => record.name));
+  const cnameNames = new Set(allRecords.filter((record) => names.has(normalizeRecordName(record.name)) && record.type === "CNAME").map((record) => normalizeRecordName(record.name)));
   const hasPairedCname = cnameNames.size > 0;
   if (hasPairedCname) return { domain, created: 0, deleted: 0, kept: 0, unproxied: 0, total: 0, skippedCname: true };
   const namesToSync = new Set(names);
-  const existing = (await listManagedRecords(zone, env, globalApiToken, allRecords)).filter((record) => names.has(record.name) && (record.type === "A" || record.type === "AAAA"));
+  // Compare every existing A/AAAA record, not only records previously marked
+  // as managed. This prevents POSTing a duplicate when a user created the
+  // same IP manually. Only managed records may be deleted.
+  const existing = allRecords.filter((record) => names.has(normalizeRecordName(record.name)) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
   const deletes: Array<{ id: string }> = [];
   const patches: Array<Record<string, unknown>> = [];
   const posts: Array<Record<string, unknown>> = [];
-  let created = 0, deleted = 0, kept = 0, unproxied = 0;
+  let created = 0, deleted = 0, kept = 0, updated = 0, unproxied = 0;
   const seen = new Set<string>();
 
   for (const record of existing) {
-    const key = `${record.type}:${record.content}`;
-    const desiredForName = desired.get(record.name) ?? new Set<string>();
-    if (!desiredForName.has(key) || seen.has(`${record.name}:${key}`)) {
-      deletes.push({ id: record.id });
-      deleted++;
+    const key = `${record.type}:${record.content.trim().toLowerCase()}`;
+    const recordName = normalizeRecordName(record.name);
+    const desiredForName = desired.get(recordName) ?? new Set<string>();
+    const seenKey = `${recordName}:${key}`;
+    if (!desiredForName.has(key)) {
+      if (isManagedRecord(record)) {
+        deletes.push({ id: record.id });
+        deleted++;
+      }
       continue;
     }
-    seen.add(`${record.name}:${key}`);
-    if (record.proxied) {
-      // Some Cloudflare plans have a DNS record tag quota of 0. Keep the
-      // managed marker in the supported comment field and never send tags.
+    if (seen.has(seenKey)) {
+      if (isManagedRecord(record)) {
+        deletes.push({ id: record.id });
+        deleted++;
+      }
+      continue;
+    }
+    seen.add(seenKey);
+    if (record.proxied || !isManagedRecord(record)) {
+      // Adopt an identical manual record instead of creating a duplicate.
+      // Never send tags because some Cloudflare plans have a tags quota of 0.
       patches.push({ id: record.id, proxied: false, comment: MANAGED_COMMENT });
-      unproxied++;
+      updated++;
+      if (record.proxied) unproxied++;
     } else kept++;
   }
 
@@ -234,5 +261,5 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
     }
   }
   await applyDnsBatch(zone, { deletes, patches, posts }, env, globalApiToken);
-  return { domain, created, deleted, kept, unproxied, total: ips.length * namesToSync.size, skippedCname: hasPairedCname };
+  return { domain, created, deleted, kept, updated, unproxied, total: ips.length * namesToSync.size, skippedCname: hasPairedCname };
 }

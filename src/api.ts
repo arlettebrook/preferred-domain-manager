@@ -1,4 +1,4 @@
-import { PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "./config";
+import { MAX_IP_SOURCE_COUNT, PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { collectPreferredIps, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
@@ -25,7 +25,7 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
     if (!/^https?:\/\//i.test(source.url) || seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).slice(0, MAX_IP_SOURCE_COUNT);
 }
 
 async function requireAuth(request: Request, env: Env) {

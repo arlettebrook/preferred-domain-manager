@@ -3,6 +3,7 @@ export const SESSION_COOKIE = "pdm_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 export const MANAGED_COMMENT = "preferred-domain-manager";
 export const MAX_SOURCE_ITEMS = 500;
+export const MAX_IP_SOURCE_COUNT = 5;
 // Keep one probe request well below the Workers subrequest budget. DNS sync
 // uses the cached result from the preview step and never opens these sockets.
 export const MAX_TCP_CHECK_ITEMS = 20;
