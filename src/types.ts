@@ -61,6 +61,8 @@ export interface SourceResult {
 }
 
 export interface CollectedIps {
+  checkedTcp: boolean;
+  sourceIps: string[];
   merged: string[];
   reachable: string[];
   sources: Array<{ id: string; url: string; count: number; error?: string }>;

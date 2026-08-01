@@ -157,6 +157,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
+  if (url.pathname === "/api/ips/collect" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), false));
   if (url.pathname === "/api/ips/preview" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), true));
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {

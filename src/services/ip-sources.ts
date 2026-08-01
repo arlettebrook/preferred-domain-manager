@@ -79,9 +79,12 @@ async function filterReachable(ips: string[]) {
 
 export async function collectPreferredIps(settings: Settings, checkTcp = true): Promise<CollectedIps> {
   const sourceResults = await Promise.all(settings.ipSources.map(fetchSource));
-  const merged = dedupeIps([...settings.manualIps, ...sourceResults.flatMap((item) => item.ips)]);
+  const sourceIps = dedupeIps(sourceResults.flatMap((item) => item.ips));
+  const merged = dedupeIps([...settings.manualIps, ...sourceIps]);
   const reachable = checkTcp ? await filterReachable(merged) : merged;
   return {
+    checkedTcp: checkTcp,
+    sourceIps,
     merged,
     reachable,
     sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, count: ips.length, error })),
