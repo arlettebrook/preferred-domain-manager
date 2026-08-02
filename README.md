@@ -12,7 +12,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - DNS 编辑会展示当前 Zone 的全部记录；仅允许操作主域名的 `A`、`AAAA`、`CNAME`，其他记录以只读方式展示。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
 - 每个域名可独立设置“同步泛域名”开关：开启时主域名变更会自动配对 `*.域名`，关闭时两者独立管理；手动/定时优选 IP 同步和 Telegram 仍会处理根域名与泛域名。记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
-- Cron 自动同步与管理员手动同步共用 Durable Object 锁。
+- Cron 可在“全局设置”中启用或关闭；启用后每 30 分钟自动抓取全部候选 IP，通过 Durable Object Alarm 分批完成 TCP 443 检测，保存完整结果后自动同步 DNS。定时同步与管理员手动同步共用锁，避免重复更新。
 - 暗黑模式。
 - Telegram Bot DNS 管理：白名单用户可通过内联键盘查看、新建、修改和删除 DNS 记录，也兼容文本命令。
 
@@ -194,7 +194,9 @@ npm run deploy
 - `POST /api/dns/records`：新建 DNS 记录。
 - `PUT /api/dns/records/:id`：编辑 DNS 记录。
 - `DELETE /api/dns/records/:id`：删除 DNS 记录。
-- `POST /api/ips/preview`：抓取来源、合并并执行 TCP 443 检测。
+- `POST /api/ips/collect`：抓取来源并冻结本次全部候选 IP。
+- `POST /api/ips/check-batch`：按安全批次继续执行 TCP 443 检测，直到覆盖全部候选。
+- `POST /api/ips/complete`：确认全部候选已经检测并保存完整结果快照。
 - `POST /api/sync`：执行当前域名或全部已配置域名的 DNS Diff Update；批量同步会返回每个域名的成功/失败结果，单个域名失败不会阻断其他域名。
 - `POST /api/auth/logout`：注销会话。
 - `POST /api/telegram/test`：测试 Telegram Bot Token。

@@ -1,7 +1,6 @@
 import { handleApi } from "./api";
 import { HttpError } from "./errors";
 import { html, json } from "./http";
-import { runSync } from "./services/sync";
 import { adminPage, landingPage } from "./ui";
 import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
@@ -30,6 +29,9 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runSync(env).catch((error) => console.error("scheduled sync failed", error)));
+    const stub = env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
+    ctx.waitUntil(stub.fetch("https://probe/cron/start", { method: "POST" }).then(async (response) => {
+      if (!response.ok) throw new Error(`scheduled probe start failed: ${response.status} ${await response.text()}`);
+    }).catch((error) => console.error("scheduled preferred IP workflow failed", error)));
   },
 };

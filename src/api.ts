@@ -1,10 +1,10 @@
-import { MAX_IP_SOURCE_COUNT, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, SETTINGS_KEY } from "./config";
+import { MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
-import { collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
+import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
-import { DomainProfile, Env, IpSource, Settings } from "./types";
+import { CollectedIps, DomainProfile, Env, IpSource, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -29,6 +29,14 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
   }).slice(0, MAX_IP_SOURCE_COUNT);
 }
 
+function probeStub(env: Env) {
+  return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-probe"));
+}
+
+function cronStub(env: Env) {
+  return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
+}
+
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
 }
@@ -45,6 +53,7 @@ async function saveConfig(request: Request, env: Env) {
     telegramBotToken?: string;
     telegramAllowedUserIds?: string[] | string;
     telegramWebhookSecret?: string;
+    cronEnabled?: boolean;
   }>(request);
   const previous = await getSettings(env);
   const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
@@ -88,6 +97,7 @@ async function saveConfig(request: Request, env: Env) {
       ? (Array.isArray(input.telegramAllowedUserIds) ? input.telegramAllowedUserIds : String(input.telegramAllowedUserIds).split(/[,\s]+/)).map(String).map((id) => id.trim()).filter((id) => /^\d+$/.test(id)).slice(0, 50)
       : previous.telegramAllowedUserIds ?? [],
     telegramWebhookSecret: typeof input.telegramWebhookSecret === "string" && input.telegramWebhookSecret ? input.telegramWebhookSecret : previous.telegramWebhookSecret,
+    cronEnabled: input.cronEnabled !== undefined ? input.cronEnabled !== false : previous.cronEnabled !== false,
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
@@ -165,17 +175,68 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
   if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
+  if (url.pathname === "/api/cron/config" && request.method === "PUT") {
+    const body = await readJson<{ enabled?: unknown }>(request);
+    if (typeof body.enabled !== "boolean") throw new HttpError(400, "定时任务开关必须是布尔值");
+    const previous = await getSettings(env);
+    const settings: Settings = { ...previous, cronEnabled: body.enabled };
+    await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+    if (!body.enabled) await cronStub(env).fetch("https://probe/cron/cancel", { method: "POST" });
+    return json({ cronEnabled: body.enabled });
+  }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
-  if (url.pathname === "/api/ips/collect" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), false));
+  if (url.pathname === "/api/ips/collect" && request.method === "POST") {
+    const settings = await getSettings(env);
+    const collected = await collectPreferredIps(settings, false);
+    await probeStub(env).fetch("https://probe/probe/start", { method: "POST", body: JSON.stringify({ settingsUpdatedAt: settings.updatedAt, collected }) });
+    return json({ ...collected, batchSize: MAX_TCP_CHECK_ITEMS });
+  }
+  if (url.pathname === "/api/ips/check-batch" && request.method === "POST") {
+    const stub = probeStub(env);
+    const stateResponse = await stub.fetch("https://probe/probe/state");
+    const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
+    if (!state.available || !state.collected || state.cursor === undefined) throw new HttpError(404, "检测任务不存在，请重新开始检测");
+    const settings = await getSettings(env);
+    if (state.settingsUpdatedAt !== settings.updatedAt) throw new HttpError(409, "优选配置已变化，请重新开始检测");
+    const requested = state.collected.merged.slice(state.cursor, state.cursor + MAX_TCP_CHECK_ITEMS);
+    if (!requested.length) return json({ checkedCount: state.cursor, total: state.collected.merged.length, reachable: state.reachable ?? [], done: true });
+    const checked = await checkTcp443Batch(requested);
+    const recordResponse = await stub.fetch("https://probe/probe/record", { method: "POST", body: JSON.stringify({ cursor: state.cursor, checkedCount: requested.length, reachable: checked.ips }) });
+    const recorded = await recordResponse.json<{ error?: string; cursor?: number; total?: number; reachable?: string[] }>();
+    if (!recordResponse.ok) throw new HttpError(recordResponse.status, recorded.error || "检测进度保存失败");
+    return json({ checkedCount: recorded.cursor, total: recorded.total, reachable: recorded.reachable, done: recorded.cursor === recorded.total });
+  }
+  if (url.pathname === "/api/ips/complete" && request.method === "POST") {
+    const settings = await getSettings(env);
+    const stub = probeStub(env);
+    const stateResponse = await stub.fetch("https://probe/probe/state");
+    const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
+    if (!state.available || !state.collected || state.cursor === undefined) throw new HttpError(404, "检测任务不存在，请重新开始检测");
+    if (state.settingsUpdatedAt !== settings.updatedAt) throw new HttpError(409, "优选配置已变化，请重新开始检测");
+    if (state.cursor !== state.collected.merged.length) throw new HttpError(400, "检测尚未覆盖全部候选 IP");
+    const collected = { ...state.collected, reachable: dedupeIps(state.reachable ?? []), checkedTcp: true, checkedCount: state.cursor, skippedCount: 0 };
+    const snapshot = await savePreferredIpSnapshot(env, settings, collected);
+    await stub.fetch("https://probe/probe/clear", { method: "POST" });
+    return json({ ...snapshot, expiresAt: new Date(Date.parse(snapshot.checkedAt) + PREFERRED_IP_CACHE_TTL_MS).toISOString() });
+  }
+  if (url.pathname === "/api/ips/progress" && request.method === "GET") {
+    const stateResponse = await probeStub(env).fetch("https://probe/probe/state");
+    const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
+    const settings = await getSettings(env);
+    if (!state.available || !state.collected || state.settingsUpdatedAt !== settings.updatedAt) return json({ available: false }, 200, { "cache-control": "no-store" });
+    return json({ available: true, checkedCount: state.cursor ?? 0, total: state.collected.merged.length, reachable: state.reachable ?? [], collected: state.collected }, 200, { "cache-control": "no-store" });
+  }
+  if (url.pathname === "/api/cron/status" && request.method === "GET") {
+    const response = await cronStub(env).fetch("https://probe/cron/status");
+    return json(await response.json(), response.status, { "cache-control": "no-store" });
+  }
+  if (url.pathname === "/api/ips/cancel" && request.method === "POST") {
+    await probeStub(env).fetch("https://probe/probe/clear", { method: "POST" });
+    return json({ ok: true });
+  }
   if (url.pathname === "/api/ips/snapshot" && request.method === "GET") {
     const snapshot = await getPreferredIpSnapshot(env, await getSettings(env));
     return json(snapshot ? { available: true, ...snapshot, expiresAt: new Date(Date.parse(snapshot.checkedAt) + PREFERRED_IP_CACHE_TTL_MS).toISOString() } : { available: false }, 200, { "cache-control": "no-store" });
-  }
-  if (url.pathname === "/api/ips/preview" && request.method === "POST") {
-    const settings = await getSettings(env);
-    const collected = await collectPreferredIps(settings, true);
-    await savePreferredIpSnapshot(env, settings, collected);
-    return json(collected);
   }
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {

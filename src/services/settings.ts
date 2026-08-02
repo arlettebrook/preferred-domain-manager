@@ -64,6 +64,7 @@ export function defaultSettings(): Settings {
     telegramBotToken: undefined,
     telegramAllowedUserIds: [],
     telegramWebhookSecret: undefined,
+    cronEnabled: true,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -87,6 +88,7 @@ export async function getSettings(env: Env): Promise<Settings> {
       cfZoneId: active?.zoneId ?? saved.cfZoneId ?? legacyZone?.zoneId ?? "",
       cfApiToken: saved.cfApiToken ?? legacyZone?.apiToken,
       telegramAllowedUserIds: saved.telegramAllowedUserIds ?? [],
+      cronEnabled: saved.cronEnabled !== false,
     };
   }
   const initial = defaultSettings();
@@ -109,6 +111,7 @@ export function publicSettings(settings: Settings) {
     telegramAllowedUserIds: settings.telegramAllowedUserIds ?? [],
     hasTelegramBotToken: Boolean(settings.telegramBotToken),
     hasTelegramWebhookSecret: Boolean(settings.telegramWebhookSecret),
+    cronEnabled: settings.cronEnabled !== false,
     updatedAt: settings.updatedAt,
   };
 }

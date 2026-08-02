@@ -75,6 +75,16 @@ export async function isTcp443Reachable(ip: string) {
 
 async function filterReachable(ips: string[]) {
   const candidates = ips.slice(0, MAX_TCP_CHECK_ITEMS);
+  const result = await checkTcp443Batch(candidates);
+  return {
+    ips: result.ips,
+    checkedCount: candidates.length,
+    skippedCount: Math.max(0, ips.length - candidates.length),
+  };
+}
+
+export async function checkTcp443Batch(ips: string[]) {
+  const candidates = dedupeIps(ips).slice(0, MAX_TCP_CHECK_ITEMS);
   const reachable: string[] = [];
   let cursor = 0;
   const worker = async () => {
@@ -86,12 +96,10 @@ async function filterReachable(ips: string[]) {
   await Promise.all(Array.from({ length: Math.min(TCP_CHECK_CONCURRENCY, Math.max(1, candidates.length)) }, worker));
   return {
     ips: reachable.sort((left, right) => (isIPv4(left) === isIPv4(right) ? left.localeCompare(right) : isIPv4(left) ? -1 : 1)),
-    checkedCount: candidates.length,
-    skippedCount: Math.max(0, ips.length - candidates.length),
   };
 }
 
-export async function collectPreferredIps(settings: Settings, checkTcp = true): Promise<CollectedIps> {
+export async function collectPreferredIps(settings: Settings, checkTcp = false): Promise<CollectedIps> {
   const sourceResults = await Promise.all(settings.ipSources.map(fetchSource));
   const sourceIps = dedupeIps(sourceResults.flatMap((item) => item.ips));
   const merged = dedupeIps([...settings.manualIps, ...sourceIps]);
@@ -120,6 +128,7 @@ export async function savePreferredIpSnapshot(env: Env, settings: Settings, coll
 export async function getPreferredIpSnapshot(env: Env, settings: Settings) {
   const snapshot = await env.PDM_KV.get<PreferredIpSnapshot>(PREFERRED_IP_CACHE_KEY, "json");
   if (!snapshot || snapshot.settingsUpdatedAt !== settings.updatedAt || !snapshot.collected?.checkedTcp) return undefined;
+  if (snapshot.collected.checkedCount !== snapshot.collected.merged.length || snapshot.collected.skippedCount !== 0) return undefined;
   const checkedAt = Date.parse(snapshot.checkedAt);
   if (!Number.isFinite(checkedAt) || Date.now() - checkedAt > PREFERRED_IP_CACHE_TTL_MS) return undefined;
   return snapshot;

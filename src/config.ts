@@ -4,10 +4,12 @@ export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 export const MANAGED_COMMENT = "preferred-domain-manager";
 export const MAX_SOURCE_ITEMS = 500;
 export const MAX_IP_SOURCE_COUNT = 5;
-// Keep one probe request well below the Workers subrequest budget. DNS sync
-// uses the cached result from the preview step and never opens these sockets.
+// Per-request probe batch. The UI drains all candidates across multiple
+// requests so every IP is checked without concentrating sockets in one Worker.
 export const MAX_TCP_CHECK_ITEMS = 20;
-export const TCP_CHECK_CONCURRENCY = 8;
+// Cloudflare Workers allows at most six simultaneous outgoing connections.
+// Keep one slot in reserve for runtime/network overhead.
+export const TCP_CHECK_CONCURRENCY = 5;
 export const TCP_CHECK_TIMEOUT_MS = 3000;
 export const PREFERRED_IP_CACHE_KEY = "preferred-ips";
 export const PREFERRED_IP_CACHE_TTL_MS = 15 * 60 * 1000;

@@ -19,5 +19,5 @@ tag = "v1"
 new_sqlite_classes = ["SyncLock"]
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/30 * * * *"]
 

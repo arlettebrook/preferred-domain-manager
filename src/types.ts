@@ -38,6 +38,7 @@ export interface Settings {
   telegramBotToken?: string;
   telegramAllowedUserIds?: string[];
   telegramWebhookSecret?: string;
+  cronEnabled?: boolean;
   updatedAt: string;
 }
 
