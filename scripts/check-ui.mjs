@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 
 const file = new URL("../src/ui/admin-page.ts", import.meta.url);
 const source = readFileSync(file, "utf8");
+for (const marker of ['id="getRegions"', '/api/ips/regions', 'region-select-all', 'region-clear-all']) {
+  if (!source.includes(marker)) throw new Error(`管理页缺少地区获取功能标记：${marker}`);
+}
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1].replace(/\$\{adminLayoutScript\}/g, ""));
 
 if (!scripts.length) throw new Error("无法找到管理页内嵌脚本");

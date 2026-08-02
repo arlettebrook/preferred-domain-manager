@@ -203,6 +203,21 @@ export async function handleApi(request: Request, env: Env) {
     return json({ cronEnabled: body.enabled });
   }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
+  if (url.pathname === "/api/ips/regions" && request.method === "POST") {
+    const input = await readJson<{ ipSources?: unknown }>(request);
+    if (input.ipSources !== undefined && !Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
+    const settings = await getSettings(env);
+    const ipSources = input.ipSources === undefined ? settings.ipSources : normalizeIpSources(input.ipSources, []);
+    const collected = await collectPreferredIps({ ...settings, ipSources, preferredRegions: undefined }, false);
+    return json({
+      availableRegions: collected.availableRegions,
+      regionCounts: collected.regionCounts,
+      untaggedCount: collected.untaggedCount,
+      sourceTotal: collected.sourceTotal,
+      sources: collected.sources,
+      fetchedAt: new Date().toISOString(),
+    }, 200, { "cache-control": "no-store" });
+  }
   if (url.pathname === "/api/ips/collect" && request.method === "POST") {
     const settings = await getSettings(env);
     const collected = await collectPreferredIps(settings, false);
