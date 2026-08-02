@@ -4,9 +4,9 @@
 
 - `src/main.ts`：Worker 入口，只负责请求分流和定时任务。
 - `src/api.ts`：管理端 API 路由与鉴权入口。
-- `src/ui/`：页面入口与页面实现。`index.ts` 是统一导出入口，`pages.ts` 负责统一导出，`landing-page.ts` 和 `admin-page.ts` 分别实现落地页与管理页模板。
+- `src/ui/`：页面入口与页面实现。`index.ts` 是统一导出入口，`pages.ts` 负责统一导出，`landing-page.ts` 和 `admin-page.ts` 分别实现落地页与管理页模板，`admin-layout.ts` 承载管理台的页面布局与导航增强脚本。
 - `src/services/`：应用服务，例如 DNS、Telegram、设置、IP 来源和同步任务。
-- `src/integrations/`：外部平台客户端，例如 `cloudflare/client.ts` 负责 Cloudflare API 通信。
+- `src/integrations/`：外部平台客户端，例如 `cloudflare/client.ts` 和 `telegram/client.ts` 分别负责 Cloudflare、Telegram API 通信。
 - `src/security/`：会话和安全相关逻辑。
 - `src/durable-objects/`：Durable Object 实现。
 - `src/validation.ts`、`src/types.ts`：跨模块复用的校验函数和类型。

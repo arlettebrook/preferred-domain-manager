@@ -8,7 +8,7 @@ import { DomainProfile, Env, IpSource, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
-import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./services/telegram";
+import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./integrations/telegram/client";
 
 function normalizeIpSources(input: unknown, fallback: IpSource[]) {
   const sources = Array.isArray(input) ? input : fallback;
