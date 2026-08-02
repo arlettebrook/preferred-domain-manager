@@ -88,7 +88,7 @@ Secrets：
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
 
-Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Workers Variables/Secrets；本项目会在 `/admin` 的“全局设置”中保存到 KV。Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
+Cloudflare API Token、默认域名、Zone ID 和优选 API 不需要添加到 Workers Variables/Secrets；本项目会在 `/admin` 的“全局设置”和“优选配置”中保存到 KV。Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
 
 不要把 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 或 `IP_SOURCES` 写入仓库、`wrangler.toml` 或 `.dev.vars`；这些值只能在 `/admin` 页面保存到 KV。
 
@@ -98,7 +98,7 @@ Cloudflare API Token、默认域名、Zone ID 和 IP 来源不需要添加到 Wo
 - `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
 - `CF_ZONE_ID`：Cloudflare Zone ID。
 - “同步泛域名”：开启后主域名 DNS 编辑会联动更新 `*.域名`；关闭后可独立编辑主域名和泛域名，但优选 IP 同步仍会处理两者。
-- `IP_SOURCES`：在“IP 来源”区域逐条添加、编辑或删除来源地址。
+- `IP_SOURCES`：在“优选配置”的“优选 API 配置”区域逐条添加、编辑或删除 API 地址，并可填写备注。
 - Telegram Bot Token、Webhook Secret 和 Telegram 用户 ID 白名单：在“Telegram Bot”区域编辑。Token 和 Secret 留空表示保持原值。
 
 面板保存的配置写入 KV，并优先于 Wrangler 初始变量。`DEFAULT_DOMAIN + CF_ZONE_ID` 始终作为同步目标。全局 Token 只返回“已配置”状态，不会通过管理 API 返回明文。
@@ -159,7 +159,7 @@ ADMIN_PASSWORD=change-me
 SESSION_SECRET=local-development-secret
 ```
 
-启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`；IP 来源在仪表盘中配置。Telegram Bot 需要在“全局设置”中配置。
+启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`，在“优选配置”区域配置优选 API 和手动优选 IP。Telegram Bot 需要在“全局设置”中配置。
 
 如果需要绕过 GitHub 连接直接从本地发布：
 
@@ -168,7 +168,7 @@ npm run check
 npm run deploy
 ```
 
-## IP 来源格式
+## 优选 API 返回格式
 
 来源接口可以返回纯文本，也可以返回 JSON。程序会递归提取其中的 IPv4/IPv6 字符串：
 
@@ -200,4 +200,4 @@ npm run deploy
 - `POST /api/telegram/commands`：同步 Telegram Bot 菜单命令。
 - `POST /telegram/webhook`：Telegram 回调入口，由 Telegram 调用，不需要管理员 Cookie。
 
-后台仪表盘集中提供 Cloudflare 连接、IP 来源、优选 IP 操作和 DNS 编辑；DNS 区域支持搜索、刷新和查看当前 Zone 的全部记录，并对主域名的 A、AAAA、CNAME 提供编辑/删除。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。
+后台按“仪表盘 - 优选面板 - DNS 编辑 - 优选配置 - 全局设置”组织功能。优选 API 配置保存不会自动获取 IP；获取和检测统一在优选面板执行。DNS 区域支持搜索、刷新和查看当前 Zone 的全部记录，并对主域名的 A、AAAA、CNAME 提供编辑/删除。DNS 类型限定为 A、AAAA、CNAME，TTL 固定为“最低（60 秒）”。标记为“优选托管”的记录会被下一次优选 IP 同步重新校正。

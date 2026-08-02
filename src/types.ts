@@ -15,6 +15,7 @@ export interface IpSource {
   id: string;
   url: string;
   enabled: boolean;
+  note?: string;
 }
 
 export interface DomainProfile {
@@ -67,7 +68,7 @@ export interface CollectedIps {
   sourceIps: string[];
   merged: string[];
   reachable: string[];
-  sources: Array<{ id: string; url: string; enabled: boolean; count: number; error?: string }>;
+  sources: Array<{ id: string; url: string; enabled: boolean; count: number; note?: string; error?: string }>;
 }
 
 export interface PreferredIpSnapshot {

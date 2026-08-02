@@ -94,7 +94,7 @@ export async function collectPreferredIps(settings: Settings, checkTcp = true): 
     sourceIps,
     merged,
     reachable: reachability.ips,
-    sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, enabled: source.enabled, count: ips.length, error })),
+    sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, enabled: source.enabled, count: ips.length, note: source.note, error })),
   };
 }
 

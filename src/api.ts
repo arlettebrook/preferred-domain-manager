@@ -19,6 +19,7 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
       id: String(source.id || crypto.randomUUID()),
       url: String(source.url || "").trim(),
       enabled: source.enabled !== false,
+      note: String(source.note || "").trim().slice(0, 120),
     };
   }).filter((source) => {
     const key = source.url.toLowerCase();
