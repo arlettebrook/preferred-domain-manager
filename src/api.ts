@@ -1,6 +1,6 @@
-import { MAX_IP_SOURCE_COUNT, PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "./config";
+import { MAX_IP_SOURCE_COUNT, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
-import { collectPreferredIps, savePreferredIpSnapshot } from "./services/ip-sources";
+import { collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
@@ -167,6 +167,10 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
   if (url.pathname === "/api/ips/collect" && request.method === "POST") return json(await collectPreferredIps(await getSettings(env), false));
+  if (url.pathname === "/api/ips/snapshot" && request.method === "GET") {
+    const snapshot = await getPreferredIpSnapshot(env, await getSettings(env));
+    return json(snapshot ? { available: true, ...snapshot, expiresAt: new Date(Date.parse(snapshot.checkedAt) + PREFERRED_IP_CACHE_TTL_MS).toISOString() } : { available: false }, 200, { "cache-control": "no-store" });
+  }
   if (url.pathname === "/api/ips/preview" && request.method === "POST") {
     const settings = await getSettings(env);
     const collected = await collectPreferredIps(settings, true);
