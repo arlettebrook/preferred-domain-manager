@@ -230,6 +230,12 @@ export async function handleApi(request: Request, env: Env) {
     const response = await cronStub(env).fetch("https://probe/cron/status");
     return json(await response.json(), response.status, { "cache-control": "no-store" });
   }
+  if (url.pathname === "/api/cron/run" && request.method === "POST") {
+    const response = await cronStub(env).fetch("https://probe/cron/start", { method: "POST" });
+    const result = await response.json<{ reason?: string }>();
+    if (!response.ok) throw new HttpError(response.status, result.reason === "no-candidates" ? "没有可检测的优选 IP" : "启动定时任务失败");
+    return json(result);
+  }
   if (url.pathname === "/api/ips/cancel" && request.method === "POST") {
     await probeStub(env).fetch("https://probe/probe/clear", { method: "POST" });
     return json({ ok: true });

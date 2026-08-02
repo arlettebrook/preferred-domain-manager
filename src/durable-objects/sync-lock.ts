@@ -48,7 +48,15 @@ export class SyncLock {
       };
       await savePreferredIpSnapshot(this.env, settings, collected);
       const result = await runSync(this.env);
-      await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, result });
+      const dnsChanges = result.results.reduce((summary, entry) => {
+        if (!entry.ok || !entry.result) return summary;
+        summary.created += entry.result.created ?? 0;
+        summary.updated += entry.result.updated ?? 0;
+        summary.deleted += entry.result.deleted ?? 0;
+        summary.kept += entry.result.kept ?? 0;
+        return summary;
+      }, { created: 0, updated: 0, deleted: 0, kept: 0 });
+      await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, dnsChanges, result });
       await this.state.storage.delete("probe");
     } catch (error) {
       await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: error instanceof Error ? error.message : "定时检测失败" });
@@ -78,7 +86,8 @@ export class SyncLock {
       const settings = await getSettings(this.env);
       const probe = await this.state.storage.get<ProbeState>("probe");
       const lastResult = await this.state.storage.get<Record<string, unknown>>("lastCronResult");
-      return Response.json({ enabled: settings.cronEnabled !== false, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, lastResult: lastResult ?? null });
+      const nextAlarm = await this.state.storage.getAlarm();
+      return Response.json({ enabled: settings.cronEnabled !== false, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
     }
     if (path === "/cron/cancel" && request.method === "POST") {
       const probe = await this.state.storage.get<ProbeState>("probe");
