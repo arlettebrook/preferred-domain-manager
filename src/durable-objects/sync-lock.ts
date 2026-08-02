@@ -56,7 +56,7 @@ export class SyncLock {
         summary.kept += entry.result.kept ?? 0;
         return summary;
       }, { created: 0, updated: 0, deleted: 0, kept: 0 });
-      await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, dnsChanges, result });
+      await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, preferredRegions: collected.preferredRegions, dnsChanges, result });
       await this.state.storage.delete("probe");
     } catch (error) {
       await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: error instanceof Error ? error.message : "定时检测失败" });

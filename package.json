@@ -9,7 +9,8 @@
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
     "check:ui": "node scripts/check-ui.mjs",
-    "check": "npm run typecheck && npm run check:ui && wrangler deploy --dry-run"
+    "check:regions": "node scripts/check-ip-regions.mjs",
+    "check": "npm run typecheck && npm run check:ui && npm run check:regions && wrangler deploy --dry-run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260730.1",

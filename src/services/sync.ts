@@ -52,6 +52,7 @@ export async function runSync(env: Env, domainId?: string) {
       at: new Date().toISOString(),
       candidates: collected.merged.length,
       reachable: collected.reachable,
+      preferredRegions: collected.preferredRegions,
       sources: collected.sources,
       result: domainId ? succeeded[0]?.result : results.length === 1 ? results[0] : results,
       results,

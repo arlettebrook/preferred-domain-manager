@@ -56,6 +56,7 @@ export function defaultSettings(): Settings {
   return {
     ipSources: [],
     manualIps: [],
+    preferredRegions: undefined,
     domains: [],
     adminPath: DEFAULT_ADMIN_PATH,
     cfApiToken: undefined,
@@ -83,6 +84,7 @@ export async function getSettings(env: Env): Promise<Settings> {
     return {
       ...saved,
       domains,
+      preferredRegions: Array.isArray(saved.preferredRegions) ? saved.preferredRegions : undefined,
       adminPath: effectiveAdminPath(saved),
       defaultDomain: active?.domain ?? saved.defaultDomain ?? legacyZone?.domain ?? "",
       cfZoneId: active?.zoneId ?? saved.cfZoneId ?? legacyZone?.zoneId ?? "",
@@ -102,6 +104,7 @@ export function publicSettings(settings: Settings) {
   return {
     ipSources: settings.ipSources,
     manualIps: settings.manualIps,
+    preferredRegions: settings.preferredRegions ?? null,
     domains: profiles.map(({ apiToken: _apiToken, ...profile }) => ({ ...profile, hasApiToken: Boolean(_apiToken) })),
     activeDomainId: activeDomain?.id || "",
     adminPath: effectiveAdminPath(settings),

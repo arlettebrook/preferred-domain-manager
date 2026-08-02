@@ -1,62 +1,34 @@
 import { connect } from "cloudflare:sockets";
-import { MAX_SOURCE_ITEMS, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, TCP_CHECK_CONCURRENCY, TCP_CHECK_TIMEOUT_MS } from "../config";
+import { MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, TCP_CHECK_CONCURRENCY, TCP_CHECK_TIMEOUT_MS } from "../config";
 import { CollectedIps, Env, IpSource, PreferredIpSnapshot, Settings, SourceResult } from "../types";
-import { dedupeIps, isIPv4, normalizeIp, validIp } from "../validation";
+import { dedupeIps, isIPv4 } from "../validation";
+import { collectIpEntries, CollectedIpEntry, regionSummary } from "./ip-source-parser";
 
-const BRACKET_ENDPOINT_PATTERN = /\[(?<address>[0-9a-f:]+)\](?::(?<port>\d{1,5}))?(?!:)/gi;
-const IPV4_ENDPOINT_PATTERN = /(?<![\d.])(?<address>(?:\d{1,3}\.){3}\d{1,3})(?::(?<port>\d{1,5}))?(?![:\d.])/g;
-
-function addIp(value: string, result: string[]) {
-  const ip = normalizeIp(value);
-  if (result.length < MAX_SOURCE_ITEMS && validIp(ip)) result.push(ip);
+function sourceResult(source: IpSource, entries: CollectedIpEntry[], preferredRegions?: string[], error?: string): SourceResult {
+  const selected = preferredRegions ? new Set(preferredRegions) : undefined;
+  const filtered = selected ? entries.filter((entry) => !entry.regions.length || entry.regions.some((region) => selected.has(region))) : entries;
+  const summary = regionSummary(entries);
+  return {
+    source,
+    ips: filtered.map((entry) => entry.ip),
+    allIps: entries.map((entry) => entry.ip),
+    ipRegions: Object.fromEntries(entries.map((entry) => [entry.ip, entry.regions])),
+    ...summary,
+    ...(error ? { error } : {}),
+  };
 }
 
-function collectEndpointIps(text: string, result: string[]) {
-  for (const pattern of [BRACKET_ENDPOINT_PATTERN, IPV4_ENDPOINT_PATTERN]) {
-    for (const match of text.matchAll(pattern)) {
-      const address = match.groups?.address;
-      const port = match.groups?.port;
-      // An omitted port means the source is an HTTPS/TCP 443 endpoint.
-      if (address && (!port || port === "443")) addIp(address, result);
-      if (result.length >= MAX_SOURCE_ITEMS) return;
-    }
-  }
-}
-
-function collectIpStrings(value: unknown, result: string[] = []) {
-  if (result.length >= MAX_SOURCE_ITEMS) return result;
-  if (typeof value === "string") {
-    collectEndpointIps(value, result);
-    if (result.length >= MAX_SOURCE_ITEMS) return result;
-    // Mask IPv4 endpoints so a rejected `:80` endpoint cannot be re-added as
-    // a bare IPv4 token by the fallback parser.
-    const withoutEndpoints = value
-      .replace(BRACKET_ENDPOINT_PATTERN, " ")
-      .replace(IPV4_ENDPOINT_PATTERN, " ");
-    const tokens = withoutEndpoints.split(/[\s,;"'\[\]{}()<>/#]+/);
-    for (const token of tokens) {
-      if (validIp(token)) addIp(token, result);
-      if (result.length >= MAX_SOURCE_ITEMS) break;
-    }
-  } else if (Array.isArray(value)) {
-    for (const item of value) collectIpStrings(item, result);
-  } else if (value && typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) collectIpStrings(item, result);
-  }
-  return result.slice(0, MAX_SOURCE_ITEMS);
-}
-
-async function fetchSource(source: IpSource): Promise<SourceResult> {
-  if (!source.enabled || !source.url) return { source, ips: [] };
+async function fetchSource(source: IpSource, preferredRegions?: string[]): Promise<SourceResult> {
+  if (!source.enabled || !source.url) return sourceResult(source, [], preferredRegions);
   try {
     const response = await fetch(source.url, { headers: { accept: "application/json,text/plain,*/*" }, signal: AbortSignal.timeout(8000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const text = await response.text();
     let payload: unknown = text;
     try { payload = JSON.parse(text); } catch { /* plain text source */ }
-    return { source, ips: dedupeIps(collectIpStrings(payload)) };
+    return sourceResult(source, collectIpEntries(payload), preferredRegions);
   } catch (error) {
-    return { source, ips: [], error: error instanceof Error ? error.message : "请求失败" };
+    return sourceResult(source, [], preferredRegions, error instanceof Error ? error.message : "请求失败");
   }
 }
 
@@ -100,18 +72,48 @@ export async function checkTcp443Batch(ips: string[]) {
 }
 
 export async function collectPreferredIps(settings: Settings, checkTcp = false): Promise<CollectedIps> {
-  const sourceResults = await Promise.all(settings.ipSources.map(fetchSource));
+  const preferredRegions = Array.isArray(settings.preferredRegions) ? settings.preferredRegions : undefined;
+  const sourceResults = await Promise.all(settings.ipSources.map((source) => fetchSource(source, preferredRegions)));
   const sourceIps = dedupeIps(sourceResults.flatMap((item) => item.ips));
   const merged = dedupeIps([...settings.manualIps, ...sourceIps]);
   const reachability = checkTcp ? await filterReachable(merged) : { ips: merged, checkedCount: 0, skippedCount: 0 };
+  const allEntries = new Map<string, CollectedIpEntry>();
+  for (const source of sourceResults) {
+    for (const ip of source.allIps) {
+      const regions = source.ipRegions[ip] ?? [];
+      const existing = allEntries.get(ip);
+      if (existing) {
+        for (const region of regions) if (!existing.regions.includes(region)) existing.regions.push(region);
+      } else {
+        allEntries.set(ip, { ip, regions: [...regions] });
+      }
+    }
+  }
+  const summary = regionSummary([...allEntries.values()]);
   return {
     checkedTcp: checkTcp,
     checkedCount: reachability.checkedCount,
     skippedCount: reachability.skippedCount,
     sourceIps,
+    sourceTotal: allEntries.size,
     merged,
     reachable: reachability.ips,
-    sources: sourceResults.map(({ source, ips, error }) => ({ id: source.id, url: source.url, enabled: source.enabled, count: ips.length, note: source.note, error })),
+    availableRegions: summary.regions,
+    preferredRegions: preferredRegions ?? null,
+    regionCounts: summary.regionCounts,
+    untaggedCount: summary.untaggedCount,
+    sources: sourceResults.map(({ source, ips, allIps, regions, regionCounts, untaggedCount, error }) => ({
+      id: source.id,
+      url: source.url,
+      enabled: source.enabled,
+      count: ips.length,
+      totalCount: allIps.length,
+      regions,
+      regionCounts,
+      untaggedCount,
+      note: source.note,
+      error,
+    })),
   };
 }
 
@@ -128,6 +130,8 @@ export async function savePreferredIpSnapshot(env: Env, settings: Settings, coll
 export async function getPreferredIpSnapshot(env: Env, settings: Settings) {
   const snapshot = await env.PDM_KV.get<PreferredIpSnapshot>(PREFERRED_IP_CACHE_KEY, "json");
   if (!snapshot || snapshot.settingsUpdatedAt !== settings.updatedAt || !snapshot.collected?.checkedTcp) return undefined;
+  // Discard snapshots created before region-aware collection was introduced.
+  if (!Array.isArray(snapshot.collected.availableRegions) || !Array.isArray(snapshot.collected.sources)) return undefined;
   if (snapshot.collected.checkedCount !== snapshot.collected.merged.length || snapshot.collected.skippedCount !== 0) return undefined;
   const checkedAt = Date.parse(snapshot.checkedAt);
   if (!Number.isFinite(checkedAt) || Date.now() - checkedAt > PREFERRED_IP_CACHE_TTL_MS) return undefined;

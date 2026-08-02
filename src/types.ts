@@ -30,6 +30,7 @@ export interface DomainProfile {
 export interface Settings {
   ipSources: IpSource[];
   manualIps: string[];
+  preferredRegions?: string[];
   domains?: DomainProfile[];
   adminPath?: string;
   cfApiToken?: string;
@@ -59,6 +60,11 @@ export interface DnsRecord {
 export interface SourceResult {
   source: IpSource;
   ips: string[];
+  allIps: string[];
+  ipRegions: Record<string, string[]>;
+  regions: string[];
+  regionCounts: Record<string, number>;
+  untaggedCount: number;
   error?: string;
 }
 
@@ -67,9 +73,25 @@ export interface CollectedIps {
   checkedCount: number;
   skippedCount: number;
   sourceIps: string[];
+  sourceTotal: number;
   merged: string[];
   reachable: string[];
-  sources: Array<{ id: string; url: string; enabled: boolean; count: number; note?: string; error?: string }>;
+  availableRegions: string[];
+  preferredRegions: string[] | null;
+  regionCounts: Record<string, number>;
+  untaggedCount: number;
+  sources: Array<{
+    id: string;
+    url: string;
+    enabled: boolean;
+    count: number;
+    totalCount: number;
+    regions: string[];
+    regionCounts: Record<string, number>;
+    untaggedCount: number;
+    note?: string;
+    error?: string;
+  }>;
 }
 
 export interface PreferredIpSnapshot {

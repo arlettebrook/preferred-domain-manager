@@ -29,12 +29,22 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
   }).slice(0, MAX_IP_SOURCE_COUNT);
 }
 
+function normalizePreferredRegions(input: unknown) {
+  if (input === null || input === undefined) return undefined;
+  if (!Array.isArray(input)) throw new HttpError(400, "优选地区必须是数组或 null");
+  return [...new Set(input.map((item) => String(item).trim().toUpperCase()).filter((item) => /^[A-Z]{2,12}$/.test(item)))].sort();
+}
+
 function probeStub(env: Env) {
   return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-probe"));
 }
 
 function cronStub(env: Env) {
   return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
+}
+
+function isRegionAwareCollected(value: CollectedIps | undefined): value is CollectedIps {
+  return Boolean(value && Array.isArray(value.availableRegions) && Array.isArray(value.sources));
 }
 
 async function requireAuth(request: Request, env: Env) {
@@ -45,6 +55,7 @@ async function saveConfig(request: Request, env: Env) {
   const input = await readJson<{
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
+    preferredRegions?: string[] | null;
     adminPath?: string;
     domains?: Array<Partial<DomainProfile>>;
     defaultDomain?: string;
@@ -87,6 +98,7 @@ async function saveConfig(request: Request, env: Env) {
   const settings: Settings = {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
+    preferredRegions: input.preferredRegions !== undefined ? normalizePreferredRegions(input.preferredRegions) : previous.preferredRegions,
     adminPath,
     domains,
     defaultDomain: activeDomain?.domain || requestedDomain,
@@ -108,10 +120,15 @@ async function saveConfig(request: Request, env: Env) {
 }
 
 async function saveIpSources(request: Request, env: Env) {
-  const input = await readJson<{ ipSources?: unknown }>(request);
+  const input = await readJson<{ ipSources?: unknown; preferredRegions?: unknown }>(request);
   if (!Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
   const previous = await getSettings(env);
-  const settings: Settings = { ...previous, ipSources: normalizeIpSources(input.ipSources, []), updatedAt: new Date().toISOString() };
+  const settings: Settings = {
+    ...previous,
+    ipSources: normalizeIpSources(input.ipSources, []),
+    preferredRegions: input.preferredRegions !== undefined ? normalizePreferredRegions(input.preferredRegions) : previous.preferredRegions,
+    updatedAt: new Date().toISOString(),
+  };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
   await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
@@ -197,6 +214,7 @@ export async function handleApi(request: Request, env: Env) {
     const stateResponse = await stub.fetch("https://probe/probe/state");
     const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
     if (!state.available || !state.collected || state.cursor === undefined) throw new HttpError(404, "检测任务不存在，请重新开始检测");
+    if (!isRegionAwareCollected(state.collected)) throw new HttpError(409, "检测任务版本已更新，请重新开始检测");
     const settings = await getSettings(env);
     if (state.settingsUpdatedAt !== settings.updatedAt) throw new HttpError(409, "优选配置已变化，请重新开始检测");
     const requested = state.collected.merged.slice(state.cursor, state.cursor + MAX_TCP_CHECK_ITEMS);
@@ -213,6 +231,7 @@ export async function handleApi(request: Request, env: Env) {
     const stateResponse = await stub.fetch("https://probe/probe/state");
     const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
     if (!state.available || !state.collected || state.cursor === undefined) throw new HttpError(404, "检测任务不存在，请重新开始检测");
+    if (!isRegionAwareCollected(state.collected)) throw new HttpError(409, "检测任务版本已更新，请重新开始检测");
     if (state.settingsUpdatedAt !== settings.updatedAt) throw new HttpError(409, "优选配置已变化，请重新开始检测");
     if (state.cursor !== state.collected.merged.length) throw new HttpError(400, "检测尚未覆盖全部候选 IP");
     const collected = { ...state.collected, reachable: dedupeIps(state.reachable ?? []), checkedTcp: true, checkedCount: state.cursor, skippedCount: 0 };
@@ -224,7 +243,7 @@ export async function handleApi(request: Request, env: Env) {
     const stateResponse = await probeStub(env).fetch("https://probe/probe/state");
     const state = await stateResponse.json<{ available: boolean; settingsUpdatedAt?: string; cursor?: number; reachable?: string[]; collected?: CollectedIps }>();
     const settings = await getSettings(env);
-    if (!state.available || !state.collected || state.settingsUpdatedAt !== settings.updatedAt) return json({ available: false }, 200, { "cache-control": "no-store" });
+    if (!state.available || !isRegionAwareCollected(state.collected) || state.settingsUpdatedAt !== settings.updatedAt) return json({ available: false }, 200, { "cache-control": "no-store" });
     return json({ available: true, checkedCount: state.cursor ?? 0, total: state.collected.merged.length, reachable: state.reachable ?? [], collected: state.collected }, 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/cron/status" && request.method === "GET") {
