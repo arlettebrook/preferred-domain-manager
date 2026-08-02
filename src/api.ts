@@ -58,6 +58,11 @@ function createRegionCatalog(collected: CollectedIps): RegionCatalog {
   };
 }
 
+function allEnabledSourcesFailed(collected: CollectedIps) {
+  const enabled = collected.sources.filter((source) => source.enabled);
+  return enabled.length > 0 && enabled.every((source) => Boolean(source.error));
+}
+
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
 }
@@ -133,9 +138,10 @@ async function saveIpSources(request: Request, env: Env) {
   const input = await readJson<{ ipSources?: unknown }>(request);
   if (!Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
   const previous = await getSettings(env);
+  const nextIpSources = normalizeIpSources(input.ipSources, []);
   const settings: Settings = {
     ...previous,
-    ipSources: normalizeIpSources(input.ipSources, []),
+    ipSources: nextIpSources,
     preferredRegions: previous.preferredRegions,
     updatedAt: new Date().toISOString(),
   };
@@ -223,6 +229,7 @@ export async function handleApi(request: Request, env: Env) {
     const settings = await getSettings(env);
     const ipSources = input.ipSources === undefined ? settings.ipSources : normalizeIpSources(input.ipSources, []);
     const collected = await collectPreferredIps({ ...settings, ipSources, preferredRegions: undefined }, false);
+    if (allEnabledSourcesFailed(collected)) throw new HttpError(502, "所有启用的 IP 来源获取失败，已保留原地区目录");
     const catalog = createRegionCatalog(collected);
     await env.PDM_KV.put(REGION_CATALOG_CACHE_KEY, JSON.stringify(catalog));
     return json({ available: true, ...catalog }, 200, { "cache-control": "no-store" });
@@ -232,6 +239,8 @@ export async function handleApi(request: Request, env: Env) {
     if (input.preferredRegions === undefined) throw new HttpError(400, "缺少地区配置");
     const preferredRegions = normalizePreferredRegions(input.preferredRegions);
     const previous = await getSettings(env);
+    const unchanged = JSON.stringify(preferredRegions ?? null) === JSON.stringify(previous.preferredRegions ?? null);
+    if (unchanged) return json({ preferredRegions: previous.preferredRegions ?? null, updatedAt: previous.updatedAt, unchanged: true }, 200, { "cache-control": "no-store" });
     const settings: Settings = { ...previous, preferredRegions, updatedAt: new Date().toISOString() };
     await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
     await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
@@ -242,8 +251,10 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/ips/collect" && request.method === "POST") {
     const settings = await getSettings(env);
     const collected = await collectPreferredIps(settings, false);
+    const catalog = allEnabledSourcesFailed(collected) ? undefined : createRegionCatalog(collected);
+    if (catalog) await env.PDM_KV.put(REGION_CATALOG_CACHE_KEY, JSON.stringify(catalog));
     await probeStub(env).fetch("https://probe/probe/start", { method: "POST", body: JSON.stringify({ settingsUpdatedAt: settings.updatedAt, collected }) });
-    return json({ ...collected, batchSize: MAX_TCP_CHECK_ITEMS });
+    return json({ ...collected, batchSize: MAX_TCP_CHECK_ITEMS, ...(catalog ? { catalogFetchedAt: catalog.fetchedAt } : {}) });
   }
   if (url.pathname === "/api/ips/check-batch" && request.method === "POST") {
     const stub = probeStub(env);

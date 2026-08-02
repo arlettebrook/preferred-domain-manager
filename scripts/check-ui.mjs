@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 const file = new URL("../src/ui/admin-page.ts", import.meta.url);
 const source = readFileSync(file, "utf8");
-for (const marker of ['id="getRegions"', 'id="saveRegions"', '/api/ips/regions', '/api/ips/regions/config', 'region-select-all', 'region-clear-all', 'loadRegionCatalog', "#saveRegions')?.addEventListener('click',saveRegionConfig"]) {
+for (const marker of ['id="getRegions"', 'id="saveRegions"', '/api/ips/regions', '/api/ips/regions/config', 'region-select-all', 'region-clear-all', 'loadRegionCatalog', 'savedPreferredRegions', 'regionSelectionChanged', 'catalogFetchedAt', "#saveRegions')?.addEventListener('click',saveRegionConfig"]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少地区获取功能标记：${marker}`);
 }
 for (const marker of ['region-invert', 'region-select-common', 'regionSearch']) {
