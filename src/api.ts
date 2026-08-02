@@ -1,10 +1,10 @@
-import { MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, SETTINGS_KEY } from "./config";
+import { MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, REGION_CATALOG_CACHE_KEY, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
 import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
-import { CollectedIps, DomainProfile, Env, IpSource, Settings } from "./types";
+import { CollectedIps, DomainProfile, Env, IpSource, RegionCatalog, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
@@ -47,6 +47,17 @@ function isRegionAwareCollected(value: CollectedIps | undefined): value is Colle
   return Boolean(value && Array.isArray(value.availableRegions) && Array.isArray(value.sources));
 }
 
+function createRegionCatalog(collected: CollectedIps): RegionCatalog {
+  return {
+    availableRegions: collected.availableRegions,
+    regionCounts: collected.regionCounts,
+    untaggedCount: collected.untaggedCount,
+    sourceTotal: collected.sourceTotal,
+    sources: collected.sources,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 async function requireAuth(request: Request, env: Env) {
   if (!(await isValidSession(request, env))) throw new HttpError(401, "未登录或登录已过期");
 }
@@ -55,7 +66,6 @@ async function saveConfig(request: Request, env: Env) {
   const input = await readJson<{
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
-    preferredRegions?: string[] | null;
     adminPath?: string;
     domains?: Array<Partial<DomainProfile>>;
     defaultDomain?: string;
@@ -98,7 +108,7 @@ async function saveConfig(request: Request, env: Env) {
   const settings: Settings = {
     ipSources,
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
-    preferredRegions: input.preferredRegions !== undefined ? normalizePreferredRegions(input.preferredRegions) : previous.preferredRegions,
+    preferredRegions: previous.preferredRegions,
     adminPath,
     domains,
     defaultDomain: activeDomain?.domain || requestedDomain,
@@ -120,13 +130,13 @@ async function saveConfig(request: Request, env: Env) {
 }
 
 async function saveIpSources(request: Request, env: Env) {
-  const input = await readJson<{ ipSources?: unknown; preferredRegions?: unknown }>(request);
+  const input = await readJson<{ ipSources?: unknown }>(request);
   if (!Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
   const previous = await getSettings(env);
   const settings: Settings = {
     ...previous,
     ipSources: normalizeIpSources(input.ipSources, []),
-    preferredRegions: input.preferredRegions !== undefined ? normalizePreferredRegions(input.preferredRegions) : previous.preferredRegions,
+    preferredRegions: previous.preferredRegions,
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
@@ -203,20 +213,31 @@ export async function handleApi(request: Request, env: Env) {
     return json({ cronEnabled: body.enabled });
   }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
+  if (url.pathname === "/api/ips/regions" && request.method === "GET") {
+    const catalog = await env.PDM_KV.get<RegionCatalog>(REGION_CATALOG_CACHE_KEY, "json");
+    return json(catalog ? { available: true, ...catalog } : { available: false }, 200, { "cache-control": "no-store" });
+  }
   if (url.pathname === "/api/ips/regions" && request.method === "POST") {
     const input = await readJson<{ ipSources?: unknown }>(request);
     if (input.ipSources !== undefined && !Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
     const settings = await getSettings(env);
     const ipSources = input.ipSources === undefined ? settings.ipSources : normalizeIpSources(input.ipSources, []);
     const collected = await collectPreferredIps({ ...settings, ipSources, preferredRegions: undefined }, false);
-    return json({
-      availableRegions: collected.availableRegions,
-      regionCounts: collected.regionCounts,
-      untaggedCount: collected.untaggedCount,
-      sourceTotal: collected.sourceTotal,
-      sources: collected.sources,
-      fetchedAt: new Date().toISOString(),
-    }, 200, { "cache-control": "no-store" });
+    const catalog = createRegionCatalog(collected);
+    await env.PDM_KV.put(REGION_CATALOG_CACHE_KEY, JSON.stringify(catalog));
+    return json({ available: true, ...catalog }, 200, { "cache-control": "no-store" });
+  }
+  if (url.pathname === "/api/ips/regions/config" && request.method === "PUT") {
+    const input = await readJson<{ preferredRegions?: unknown }>(request);
+    if (input.preferredRegions === undefined) throw new HttpError(400, "缺少地区配置");
+    const preferredRegions = normalizePreferredRegions(input.preferredRegions);
+    const previous = await getSettings(env);
+    const settings: Settings = { ...previous, preferredRegions, updatedAt: new Date().toISOString() };
+    await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+    await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
+    await probeStub(env).fetch("https://probe/probe/clear", { method: "POST" });
+    await cronStub(env).fetch("https://probe/cron/cancel", { method: "POST" });
+    return json({ preferredRegions: settings.preferredRegions ?? null, updatedAt: settings.updatedAt }, 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/ips/collect" && request.method === "POST") {
     const settings = await getSettings(env);

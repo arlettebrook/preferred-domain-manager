@@ -99,3 +99,12 @@ export interface PreferredIpSnapshot {
   checkedAt: string;
   collected: CollectedIps;
 }
+
+export interface RegionCatalog {
+  availableRegions: string[];
+  regionCounts: Record<string, number>;
+  untaggedCount: number;
+  sourceTotal: number;
+  sources: CollectedIps["sources"];
+  fetchedAt: string;
+}

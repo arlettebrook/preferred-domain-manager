@@ -13,6 +13,7 @@ export const TCP_CHECK_CONCURRENCY = 5;
 export const TCP_CHECK_TIMEOUT_MS = 3000;
 export const PREFERRED_IP_CACHE_KEY = "preferred-ips";
 export const PREFERRED_IP_CACHE_TTL_MS = 15 * 60 * 1000;
+export const REGION_CATALOG_CACHE_KEY = "preferred-ip-regions";
 export const SYNC_LOCK_NAME = "global";
 // Cloudflare DNS-only records accept 60 seconds on standard plans.
 export const DNS_TTL = 60;
