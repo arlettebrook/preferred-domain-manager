@@ -3,7 +3,8 @@ import { MAX_SOURCE_ITEMS, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRE
 import { CollectedIps, Env, IpSource, PreferredIpSnapshot, Settings, SourceResult } from "../types";
 import { dedupeIps, isIPv4, normalizeIp, validIp } from "../validation";
 
-const ENDPOINT_PATTERN = /(?:^|[\s,;"'([{])(?<address>\[(?:[0-9a-f:]+)\]|(?:\d{1,3}\.){3}\d{1,3}):(?<port>\d{1,5})(?=$|[\s,;"'\]})#])/gi;
+const BRACKET_ENDPOINT_PATTERN = /\[(?<address>[0-9a-f:]+)\](?::(?<port>\d{1,5}))?(?!:)/gi;
+const IPV4_ENDPOINT_PATTERN = /(?<![\d.])(?<address>(?:\d{1,3}\.){3}\d{1,3})(?::(?<port>\d{1,5}))?(?![:\d.])/g;
 
 function addIp(value: string, result: string[]) {
   const ip = normalizeIp(value);
@@ -11,24 +12,32 @@ function addIp(value: string, result: string[]) {
 }
 
 function collectEndpointIps(text: string, result: string[]) {
-  for (const match of text.matchAll(ENDPOINT_PATTERN)) {
-    if (match.groups?.port === "443" && match.groups.address) {
-      addIp(match.groups.address, result);
+  for (const pattern of [BRACKET_ENDPOINT_PATTERN, IPV4_ENDPOINT_PATTERN]) {
+    for (const match of text.matchAll(pattern)) {
+      const address = match.groups?.address;
+      const port = match.groups?.port;
+      // An omitted port means the source is an HTTPS/TCP 443 endpoint.
+      if (address && (!port || port === "443")) addIp(address, result);
+      if (result.length >= MAX_SOURCE_ITEMS) return;
     }
-    if (result.length >= MAX_SOURCE_ITEMS) break;
   }
 }
 
 function collectIpStrings(value: unknown, result: string[] = []) {
   if (result.length >= MAX_SOURCE_ITEMS) return result;
   if (typeof value === "string") {
-    // Sources may return nodes such as `1.2.3.4:443#label`. Only endpoints
-    // explicitly using TCP 443 are eligible; plain IP tokens remain supported
-    // for older sources that return one IP per line.
     collectEndpointIps(value, result);
     if (result.length >= MAX_SOURCE_ITEMS) return result;
-    const tokens = value.split(/[\s,;"'\[\]{}]+/).map(normalizeIp).filter(validIp);
-    for (const token of tokens) addIp(token, result);
+    // Mask IPv4 endpoints so a rejected `:80` endpoint cannot be re-added as
+    // a bare IPv4 token by the fallback parser.
+    const withoutEndpoints = value
+      .replace(BRACKET_ENDPOINT_PATTERN, " ")
+      .replace(IPV4_ENDPOINT_PATTERN, " ");
+    const tokens = withoutEndpoints.split(/[\s,;"'\[\]{}()<>/#]+/);
+    for (const token of tokens) {
+      if (validIp(token)) addIp(token, result);
+      if (result.length >= MAX_SOURCE_ITEMS) break;
+    }
   } else if (Array.isArray(value)) {
     for (const item of value) collectIpStrings(item, result);
   } else if (value && typeof value === "object") {
