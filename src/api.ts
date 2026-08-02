@@ -3,7 +3,7 @@ import { createSession, expiredCookie, isValidSession, sessionCookie } from "./s
 import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
-import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
+import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { CollectedIps, DomainProfile, Env, IpSource, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
@@ -168,6 +168,7 @@ export async function handleApi(request: Request, env: Env) {
       const body = await readJson<Record<string, unknown>>(request);
       return json({ record: await updateDnsRecord(target, dnsMatch[1], body, env, apiToken) });
     }
+    if (request.method === "DELETE" && !dnsMatch[1]) return json({ ok: true, deleted: await clearDnsRecords(target, env, apiToken) });
     if (request.method === "DELETE" && dnsMatch[1]) { await deleteDnsRecord(target, dnsMatch[1], env, apiToken); return json({ ok: true }); }
     throw new HttpError(405, "不支持的 DNS 操作");
   }

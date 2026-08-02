@@ -200,6 +200,23 @@ export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, glo
   if (pairedWildcard) await deleteRecord(zone, pairedWildcard.id, env, globalApiToken);
 }
 
+export async function clearDnsRecords(zone: DnsTarget, env: Env, globalApiToken?: string) {
+  const records = await listDnsRecords(zone, env, globalApiToken);
+  const wildcard = pairedName(zone);
+  const editableRecords = records.filter((record) => isEditableDnsRecord(zone, record) || (
+    shouldSyncWildcard(zone)
+    && sameRecordName(record.name, wildcard)
+    && ["A", "AAAA", "CNAME"].includes(record.type)
+  ));
+  if (!editableRecords.length) return 0;
+  await applyDnsBatch(zone, {
+    deletes: editableRecords.map((record) => ({ id: record.id })),
+    patches: [],
+    posts: [],
+  }, env, globalApiToken);
+  return editableRecords.length;
+}
+
 export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalApiToken?: string) {
   const domain = normalizeDomain(zone.domain);
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
