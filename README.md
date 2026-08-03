@@ -94,6 +94,41 @@ example.com/*
 
 根域名与泛域名都必须经过 Worker。Cloudflare Zone 必须处于激活状态，但优选 DNS 记录本身必须保持 DNS only（灰云）。同步逻辑会强制新建记录为 `proxied: false`，并把由本管理器维护且误开代理的记录改回灰云。
 
+## 本地开发
+
+本地开发需要 Node.js 18 或更高版本。克隆或下载仓库后，在项目目录安装依赖：
+
+```bash
+npm ci
+```
+
+在项目根目录创建 `.dev.vars` 文件，并填写本地管理后台使用的 Secret：
+
+```dotenv
+ADMIN_PASSWORD=你的本地管理密码
+SESSION_SECRET=与管理密码不同的随机长字符串
+```
+
+启动本地开发服务器：
+
+```bash
+npm run dev
+```
+
+启动完成后，打开终端显示的本地地址，并进入 `/admin` 登录。域名、Zone ID、Cloudflare API Token、优选 IP 来源和其他运行参数均通过管理后台配置。本地 KV 和 Durable Objects 数据保存在 Wrangler 的本地开发目录中，不会写入生产环境。
+
+修改完成后，可以运行以下检查：
+
+```bash
+npm run typecheck
+npm run check:ui
+npm run check
+```
+
+- `typecheck`：检查 TypeScript 类型。
+- `check:ui`：检查内嵌页面脚本和关键 UI 结构。
+- `check`：执行完整检查，并验证 Worker 能否正常构建。
+
 ## 优选 API 返回格式
 
 来源接口可以返回纯文本，也可以返回 JSON。程序会递归提取其中的 IPv4/IPv6 字符串，并仅保留端口为 `443` 的地址；未指定端口的 IP 按 `443` 处理，其他端口会被过滤：
