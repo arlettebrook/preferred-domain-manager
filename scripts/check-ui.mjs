@@ -20,6 +20,8 @@ for (const marker of [
   "id=\"homeRedirectEnabled\"",
   "id=\"homeRedirectUrl\"",
   "saveHomeRedirect",
+  "id='githubProject'",
+  "githubProjectUrl='https://github.com/arlettebrook/preferred-domain-manager'",
   "telegram-credentials",
   "cron-settings-card>.check input:checked",
   "Token 已配置",
@@ -60,6 +62,8 @@ for (const marker of [
   'id="capabilities"',
   'class="preview"',
   'class="feature-grid"',
+  'https://github.com/arlettebrook/preferred-domain-manager',
+  'aria-label="打开 GitHub 项目"',
   '@media(prefers-reduced-motion:reduce)',
   'escapeHtml(adminPath)',
 ]) {

@@ -23,7 +23,7 @@ a{color:inherit}
 .brand{display:inline-flex;align-items:center;gap:12px;color:var(--text);font-weight:780;letter-spacing:-.02em;text-decoration:none}
 .brand-mark{display:grid;place-items:center;width:38px;height:38px;border:1px solid #9cafff55;border-radius:12px;background:linear-gradient(135deg,var(--primary),var(--primary-2));box-shadow:0 10px 28px #7187ff3d;font-size:17px;font-weight:850}
 .brand-copy{display:grid;line-height:1.15}.brand-copy small{margin-top:4px;color:var(--muted-2);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-.header-action{display:inline-flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid var(--border);border-radius:11px;background:#ffffff08;color:#dbe3f6;font-size:13px;font-weight:700;text-decoration:none;transition:.18s ease}
+.header-actions{display:flex;align-items:center;gap:8px}.header-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid var(--border);border-radius:11px;background:#ffffff08;color:#dbe3f6;font-size:13px;font-weight:700;text-decoration:none;transition:.18s ease}.header-action svg{flex:none;width:17px;height:17px;fill:currentColor}
 .header-action:hover{border-color:var(--border-strong);background:#ffffff0d;transform:translateY(-1px)}
 .hero{display:grid;grid-template-columns:minmax(0,1.04fr) minmax(420px,.96fr);align-items:center;gap:70px;min-height:650px;padding:78px 0 84px}
 .eyebrow{display:inline-flex;align-items:center;gap:9px;margin-bottom:22px;color:#b3bfff;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
@@ -49,7 +49,7 @@ a{color:inherit}
 a:focus-visible{outline:2px solid #aab7ff;outline-offset:4px}
 @media(max-width:920px){.hero{grid-template-columns:1fr;gap:50px;min-height:0;padding:65px 0 75px}.hero-copy{max-width:760px}.preview-wrap{width:min(620px,100%);margin:auto}.preview{transform:none}.feature-grid{grid-template-columns:1fr 1fr}.feature-card:last-child{grid-column:1/-1}.section-head{align-items:start;flex-direction:column}.section-head p{max-width:600px}}
 @media(max-width:640px){.shell{width:min(100% - 28px,1180px)}.site-header{min-height:68px}.brand-copy small{display:none}.header-action{padding:8px 10px;font-size:12px}.hero{gap:40px;padding:48px 0 60px}.hero h1{font-size:clamp(37px,12vw,52px)}.hero-description{font-size:15px}.hero-actions{display:grid;grid-template-columns:1fr}.button{width:100%}.trust-row{gap:10px 16px;margin-top:24px}.preview-body{padding:12px}.preview-metrics{gap:6px}.metric{padding:10px}.metric strong{font-size:16px}.record{grid-template-columns:42px minmax(0,1fr);gap:7px;padding:9px 5px}.record-state{display:none}.sync-card{padding:10px}.section{padding:15px 0 65px}.feature-grid{grid-template-columns:1fr}.feature-card,.feature-card:last-child{grid-column:auto;min-height:0;padding:21px}.feature-icon{margin-bottom:18px}.cta{align-items:stretch;flex-direction:column;padding:26px 22px}.site-footer{align-items:flex-start;flex-direction:column-reverse;gap:8px}}
-@media(max-width:390px){.header-action span{display:none}.header-action:after{content:"进入后台"}.preview-metrics{grid-template-columns:1fr}.metric:nth-child(n+2){display:none}.host-line{width:100%}}
+@media(max-width:440px){.header-actions{gap:6px}.header-action{width:40px;padding:8px}.header-action .action-label{display:none}.preview-metrics{grid-template-columns:1fr}.metric:nth-child(n+2){display:none}.host-line{width:100%}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition-duration:.01ms!important}}
 </style>
 </head>
@@ -60,7 +60,10 @@ a:focus-visible{outline:2px solid #aab7ff;outline-offset:4px}
       <span class="brand-mark">优</span>
       <span class="brand-copy">优选域名管理<small>Preferred Domain Manager</small></span>
     </a>
-    <a class="header-action" href="${safeAdminPath}"><span>管理控制台</span><span aria-hidden="true">↗</span></a>
+    <div class="header-actions">
+      <a class="header-action" href="https://github.com/arlettebrook/preferred-domain-manager" target="_blank" rel="noopener noreferrer" aria-label="打开 GitHub 项目"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.1 1.2a10.8 10.8 0 0 1 5.7-.8 10.8 10.8 0 0 1 5.7.8c2.2-1.5 3.1-1.2 3.1-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.1v3.1c0 .4.2.7.8.6A11.4 11.4 0 0 0 12 .8Z"/></svg><span class="action-label">GitHub</span></a>
+      <a class="header-action" href="${safeAdminPath}" aria-label="进入管理控制台"><span class="action-label">管理控制台</span><span aria-hidden="true">↗</span></a>
+    </div>
   </header>
 
   <main>
