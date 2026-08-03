@@ -16,7 +16,7 @@ export function landingPage(host: string, adminPath = "/admin") {
 <style>
 :root{color-scheme:dark;--bg:#070e1b;--panel:#0f1a2d;--panel-strong:#14223a;--soft:#101d32;--text:#f3f6ff;--muted:#93a4c0;--muted-2:#7183a1;--border:#253957;--border-strong:#385078;--primary:#7187ff;--primary-2:#956fff;--primary-soft:#7187ff1a;--ok:#51d6a3;--shadow:0 28px 90px #0007;--radius:24px}
 *{box-sizing:border-box}
-html{width:100%;max-width:100%;scroll-behavior:smooth;overflow-x:clip}
+html{width:100%;max-width:100%;scroll-behavior:auto;overflow-x:clip}
 body{width:100%;max-width:100%;margin:0;min-height:100vh;overflow-x:clip;background:radial-gradient(circle at 7% -4%,#526dff25,transparent 30%),radial-gradient(circle at 96% 12%,#935eff1a,transparent 27%),var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
 body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.32;background-image:linear-gradient(#fff018 1px,transparent 1px),linear-gradient(90deg,#fff018 1px,transparent 1px);background-size:54px 54px;mask-image:linear-gradient(to bottom,#000,transparent 70%)}
 a{color:inherit}
@@ -128,6 +128,33 @@ a:focus-visible{outline:2px solid #aab7ff;outline-offset:4px}
 
   <footer class="site-footer"><span>根域名与泛域名均可绑定至当前 Worker。</span><span class="footer-brand"><i class="footer-dot"></i> Preferred Domain Manager</span></footer>
 </div>
+<script>
+(() => {
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduceMotion) return;
+  document.querySelectorAll('a[href^="#"]').forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const hash = link.getAttribute("href");
+      if (!hash || hash === "#") return;
+      const target = document.querySelector(hash);
+      if (!target) return;
+      event.preventDefault();
+      const start = window.scrollY;
+      const end = start + target.getBoundingClientRect().top;
+      const distance = end - start;
+      const duration = Math.min(900, Math.max(300, Math.abs(distance) * 0.6));
+      const startedAt = performance.now();
+      const step = (now) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        window.scrollTo(0, start + distance * progress);
+        if (progress < 1) requestAnimationFrame(step);
+        else history.pushState(null, "", hash);
+      };
+      requestAnimationFrame(step);
+    });
+  });
+})();
+</script>
 </body>
 </html>`;
 }
