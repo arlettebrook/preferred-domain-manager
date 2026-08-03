@@ -4,6 +4,20 @@ export function normalizeDomain(value: string) {
 
 export const DEFAULT_ADMIN_PATH = "/admin";
 
+export function normalizeHomeRedirectUrl(value: string) {
+  return value.trim();
+}
+
+export function isValidHomeRedirectUrl(value: string) {
+  if (!value || value.length > 2048) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeAdminPath(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return DEFAULT_ADMIN_PATH;

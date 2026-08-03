@@ -33,6 +33,8 @@ export interface Settings {
   preferredRegions?: string[];
   domains?: DomainProfile[];
   adminPath?: string;
+  homeRedirectEnabled?: boolean;
+  homeRedirectUrl?: string;
   cfApiToken?: string;
   defaultDomain?: string;
   cfZoneId?: string;

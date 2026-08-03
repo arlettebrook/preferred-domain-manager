@@ -8,7 +8,7 @@ const settingsLayoutStyles = `<style>
 #settings.page:not(.active){display:none}
 #settings.page.active>.page-head{grid-column:1/-1;margin:0 0 2px}
 #settings.page.active>.settings-card{width:100%;max-width:none;min-width:0;margin:0}
-#settings.page.active>.domain-profiles-card,#settings.page.active>.telegram-settings-card{grid-column:1/-1}
+#settings.page.active>.domain-profiles-card,#settings.page.active>.home-redirect-card,#settings.page.active>.telegram-settings-card{grid-column:1/-1}
 #settings.page.active>.admin-path-card,#settings.page.active>.cron-settings-card{grid-column:auto}
 #settings.page.active>.settings-card>.section-icon{float:none;display:inline-grid;margin:0 12px 0 0;vertical-align:top}
 #settings.page.active>.settings-card>.section-head{display:inline-flex;width:calc(100% - 54px);min-height:34px;margin-bottom:18px;padding-left:0;vertical-align:top}

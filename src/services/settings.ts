@@ -1,6 +1,6 @@
 import { SETTINGS_KEY } from "../config";
 import { DomainProfile, DnsTarget, Env, Settings } from "../types";
-import { DEFAULT_ADMIN_PATH, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "../validation";
+import { DEFAULT_ADMIN_PATH, isValidAdminPath, isValidHomeRedirectUrl, normalizeAdminPath, normalizeDomain } from "../validation";
 
 function profileId(domain: string) {
   return `domain:${domain}`;
@@ -52,6 +52,11 @@ export function effectiveAdminPath(settings: Pick<Settings, "adminPath">) {
   return isValidAdminPath(normalized) ? normalized : DEFAULT_ADMIN_PATH;
 }
 
+export function effectiveHomeRedirect(settings: Pick<Settings, "homeRedirectEnabled" | "homeRedirectUrl">) {
+  const target = String(settings.homeRedirectUrl || "").trim();
+  return settings.homeRedirectEnabled === true && isValidHomeRedirectUrl(target) ? target : "";
+}
+
 export function defaultSettings(): Settings {
   return {
     ipSources: [],
@@ -59,6 +64,8 @@ export function defaultSettings(): Settings {
     preferredRegions: undefined,
     domains: [],
     adminPath: DEFAULT_ADMIN_PATH,
+    homeRedirectEnabled: false,
+    homeRedirectUrl: "",
     cfApiToken: undefined,
     defaultDomain: "",
     cfZoneId: "",
@@ -86,6 +93,8 @@ export async function getSettings(env: Env): Promise<Settings> {
       domains,
       preferredRegions: Array.isArray(saved.preferredRegions) && saved.preferredRegions.length ? saved.preferredRegions : undefined,
       adminPath: effectiveAdminPath(saved),
+      homeRedirectEnabled: saved.homeRedirectEnabled === true,
+      homeRedirectUrl: String(saved.homeRedirectUrl || "").trim(),
       defaultDomain: active?.domain ?? saved.defaultDomain ?? legacyZone?.domain ?? "",
       cfZoneId: active?.zoneId ?? saved.cfZoneId ?? legacyZone?.zoneId ?? "",
       cfApiToken: saved.cfApiToken ?? legacyZone?.apiToken,
@@ -108,6 +117,8 @@ export function publicSettings(settings: Settings) {
     domains: profiles.map(({ apiToken: _apiToken, ...profile }) => ({ ...profile, hasApiToken: Boolean(_apiToken) })),
     activeDomainId: activeDomain?.id || "",
     adminPath: effectiveAdminPath(settings),
+    homeRedirectEnabled: settings.homeRedirectEnabled === true,
+    homeRedirectUrl: String(settings.homeRedirectUrl || "").trim(),
     defaultDomain: settings.defaultDomain ?? "",
     cfZoneId: settings.cfZoneId ?? "",
     hasCfApiToken: Boolean(effectiveApiToken(settings)),

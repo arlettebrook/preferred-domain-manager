@@ -5,7 +5,7 @@ import { adminPage, landingPage } from "./ui";
 import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
 import { handleTelegramWebhook } from "./services/telegram";
-import { effectiveAdminPath, getSettings } from "./services/settings";
+import { effectiveAdminPath, effectiveHomeRedirect, getSettings } from "./services/settings";
 
 export { SyncLock };
 
@@ -20,6 +20,8 @@ export default {
       const requestPath = url.pathname.replace(/\/+$/, "") || "/";
       if (requestPath === adminPath) return html(adminPage());
       if (requestPath !== "/") return Response.redirect(new URL("/", request.url), 302);
+      const homeRedirect = effectiveHomeRedirect(settings);
+      if (homeRedirect) return Response.redirect(homeRedirect, 302);
       return html(landingPage(url.host, adminPath));
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message }, error.status);

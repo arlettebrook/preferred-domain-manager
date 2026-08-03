@@ -17,6 +17,9 @@ for (const marker of [
   "@media(prefers-reduced-motion:reduce)",
   "class=\"settings-empty\"",
   "id=\"adminPathPreview\"",
+  "id=\"homeRedirectEnabled\"",
+  "id=\"homeRedirectUrl\"",
+  "saveHomeRedirect",
   "telegram-credentials",
   "cron-settings-card>.check input:checked",
   "Token 已配置",
@@ -32,7 +35,7 @@ const layoutFile = new URL("../src/ui/admin-layout.ts", import.meta.url);
 const layoutSource = readFileSync(layoutFile, "utf8");
 for (const marker of [
   "#settings.page.active{grid-template-columns:repeat(2,minmax(0,1fr))",
-  "#settings>.page-head,#settings>.domain-profiles-card,#settings>.telegram-settings-card{grid-column:1/-1}",
+  "#settings>.page-head,#settings>.domain-profiles-card,#settings>.home-redirect-card,#settings>.telegram-settings-card{grid-column:1/-1}",
   "@media(max-width:820px){#settings.page.active{grid-template-columns:minmax(0,1fr)}",
 ]) {
   if (!layoutSource.includes(marker)) throw new Error(`管理台布局缺少全局设置修复标记：${marker}`);
@@ -44,7 +47,7 @@ const pagesFile = new URL("../src/ui/pages.ts", import.meta.url);
 const pagesSource = readFileSync(pagesFile, "utf8");
 for (const marker of [
   "#settings.page.active{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))",
-  "#settings.page.active>.domain-profiles-card,#settings.page.active>.telegram-settings-card{grid-column:1/-1}",
+  "#settings.page.active>.domain-profiles-card,#settings.page.active>.home-redirect-card,#settings.page.active>.telegram-settings-card{grid-column:1/-1}",
   "#settings.page.active>.admin-path-card,#settings.page.active>.cron-settings-card{grid-column:auto}",
   "@media(max-width:980px){#settings.page.active",
 ]) {

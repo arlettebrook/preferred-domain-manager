@@ -5,7 +5,7 @@ import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, public
 import { runSync } from "./services/sync";
 import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { CollectedIps, DomainProfile, Env, IpSource, RegionCatalog, Settings } from "./types";
-import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, normalizeAdminPath, normalizeDomain } from "./validation";
+import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, isValidHomeRedirectUrl, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
 import { json, readJson } from "./http";
 import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramBotInfo } from "./integrations/telegram/client";
@@ -73,6 +73,8 @@ async function saveConfig(request: Request, env: Env) {
     ipSources?: Array<Partial<IpSource>>;
     manualIps?: string[];
     adminPath?: string;
+    homeRedirectEnabled?: boolean;
+    homeRedirectUrl?: string;
     domains?: Array<Partial<DomainProfile>>;
     defaultDomain?: string;
     cfZoneId?: string;
@@ -85,6 +87,11 @@ async function saveConfig(request: Request, env: Env) {
   const previous = await getSettings(env);
   const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
   if (!isValidAdminPath(adminPath)) throw new HttpError(400, "管理员访问路径格式无效，仅支持类似 /admin 或 /manage 的路径，且不能使用 API/Webhook 路径");
+  const homeRedirectEnabled = input.homeRedirectEnabled !== undefined ? input.homeRedirectEnabled === true : previous.homeRedirectEnabled === true;
+  const homeRedirectUrl = input.homeRedirectUrl !== undefined ? String(input.homeRedirectUrl).trim() : String(previous.homeRedirectUrl || "").trim();
+  if (homeRedirectUrl && !isValidHomeRedirectUrl(homeRedirectUrl)) throw new HttpError(400, "首页伪装目标链接无效，请使用完整的 http:// 或 https:// 地址");
+  if (homeRedirectUrl && new URL(homeRedirectUrl).origin === new URL(request.url).origin) throw new HttpError(400, "首页伪装目标链接不能使用当前站点地址，否则可能产生循环重定向");
+  if (homeRedirectEnabled && !homeRedirectUrl) throw new HttpError(400, "开启首页伪装前请先填写目标链接");
   const requestedDomain = input.defaultDomain !== undefined ? normalizeDomain(String(input.defaultDomain)) : normalizeDomain(previous.defaultDomain || "");
   const requestedZoneId = input.cfZoneId !== undefined ? String(input.cfZoneId).trim() : String(previous.cfZoneId || "").trim();
   const previousDomains = domainProfiles(previous);
@@ -116,6 +123,8 @@ async function saveConfig(request: Request, env: Env) {
     manualIps: dedupeIps((input.manualIps ?? previous.manualIps ?? []).flatMap((item) => String(item).split(/[\s,]+/))),
     preferredRegions: previous.preferredRegions,
     adminPath,
+    homeRedirectEnabled,
+    homeRedirectUrl,
     domains,
     defaultDomain: activeDomain?.domain || requestedDomain,
     cfZoneId: activeDomain?.zoneId || requestedZoneId,
