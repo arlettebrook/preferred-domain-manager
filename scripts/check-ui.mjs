@@ -66,6 +66,8 @@ for (const marker of [
   'class="feature-grid"',
   'https://github.com/arlettebrook/preferred-domain-manager',
   'class="github-mark"',
+  'class="admin-icon"',
+  '.header-action .admin-icon{display:block}',
   'viewport-fit=cover',
   'overflow-x:clip',
   '.hero{grid-template-columns:minmax(0,1fr)',
