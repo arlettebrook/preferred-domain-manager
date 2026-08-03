@@ -8,6 +8,16 @@ for (const marker of ['id="getRegions"', 'id="saveRegions"', '/api/ips/regions',
 for (const marker of ['region-invert', 'region-select-common', 'regionSearch']) {
   if (source.includes(marker)) throw new Error(`管理页仍包含已移除的地区增强功能：${marker}`);
 }
+for (const marker of [
+  ".login{width:100%;max-width:440px;min-width:0}",
+  "if(message==='未登录'){setStatus($('#loginStatus'),'')",
+  "themeButton.dataset.icon=light?'☾':'☼'",
+  "button.setAttribute('aria-current','page')",
+  "if(event.key==='Tab')",
+  "@media(prefers-reduced-motion:reduce)",
+]) {
+  if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
+}
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1].replace(/\$\{adminLayoutScript\}/g, ""));
 
 if (!scripts.length) throw new Error("无法找到管理页内嵌脚本");
