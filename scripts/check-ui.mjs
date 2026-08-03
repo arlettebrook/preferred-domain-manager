@@ -53,4 +53,16 @@ for (const marker of [
 ]) {
   if (!pagesSource.includes(marker)) throw new Error(`管理页入口缺少全局设置修复标记：${marker}`);
 }
+const landingFile = new URL("../src/ui/landing-page.ts", import.meta.url);
+const landingSource = readFileSync(landingFile, "utf8");
+for (const marker of [
+  'id="hero-title"',
+  'id="capabilities"',
+  'class="preview"',
+  'class="feature-grid"',
+  '@media(prefers-reduced-motion:reduce)',
+  'escapeHtml(adminPath)',
+]) {
+  if (!landingSource.includes(marker)) throw new Error(`默认主页缺少增强标记：${marker}`);
+}
 console.log(`Embedded admin scripts syntax: ok (${scripts.length + 1})`);
