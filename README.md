@@ -36,104 +36,56 @@ scripts/                         本地检查脚本
 docs/development.md              开发结构与修改指南
 ```
 
-## 通过 Cloudflare Workers 页面连接 GitHub 部署
+## 通过 Fork 和 Cloudflare 网页部署
 
-本项目不使用 GitHub Actions 发布。推荐在 Cloudflare Dashboard 的 Workers & Pages 页面直接连接 GitHub 仓库，由 Cloudflare Workers Builds 负责构建和部署。
+本项目可以完全通过 GitHub 和 Cloudflare 网页部署，不需要本地终端，也不需要配置 GitHub Actions。
 
-### 1. 准备 KV Namespace
+### 1. Fork 仓库
 
-可以使用 Wrangler 创建：
+打开本项目的 GitHub 页面，点击 **Fork**，选择自己的账号或组织，并保留默认分支 `main`。后续 Cloudflare 应连接这个 Fork，而不是上游仓库。
 
-```bash
-npx wrangler kv namespace create PDM_KV
-```
+### 2. 准备 Cloudflare 存储
 
-或者在 Cloudflare Dashboard → Storage & databases → KV 中创建 `PDM_KV`。将返回的 namespace ID 填入 [wrangler.toml](wrangler.toml)：
+项目使用 KV 保存管理面板配置，并使用 Durable Objects 执行同步锁和定时检测。请在 Cloudflare Dashboard 的 **Storage & databases → KV** 中创建一个 KV Namespace。
 
-```toml
-[[kv_namespaces]]
-binding = "PDM_KV"
-id = "你的 KV namespace ID"
-```
+创建后，在 Fork 仓库的 GitHub 网页编辑 [wrangler.toml](wrangler.toml)，将 `PDM_KV` 绑定下的 `id` 改为这个 Namespace 的 ID，然后提交修改。Durable Objects 的绑定和迁移已包含在仓库配置中，无需额外创建。
 
-不要保留 `replace-with-your-kv-namespace-id` 占位符。
+### 3. 连接 Fork 并部署
 
-### 2. 在 Cloudflare 连接 GitHub
+在 Cloudflare Dashboard 中进入 **Workers & Pages → Create application → Workers → Connect to Git**，授权 GitHub 后：
 
-进入 Cloudflare Dashboard → Workers & Pages → Create application → Workers → Connect to Git，完成 GitHub 授权后：
-
-1. 选择 GitHub 仓库 `preferred-domain-manager`。
+1. 选择刚才创建的 Fork 仓库。
 2. 生产分支选择 `main`。
-3. Root directory 保持 `/`。
-4. Build command 填写 `npm run build`。
-5. Deploy command 填写 `npm run deploy`。
-6. 保存并部署。
+3. 根目录保持仓库根目录。
+4. 构建设置保持 Cloudflare 自动识别的默认值，不添加自定义命令。
+5. 保存并开始部署。
 
-`npm run build` 会执行 TypeScript 类型检查；`npm run deploy` 会由 Cloudflare Workers Builds 调用 Wrangler 发布 Worker。后续推送到 `main` 时，Cloudflare 会按照该连接配置进行构建和发布，不需要 GitHub Actions，也不需要把 Cloudflare API Token 放进 GitHub Secrets。
+以后只要将修改提交到 Fork 的 `main` 分支，Cloudflare 就会自动重新构建并发布。
 
-如果 Cloudflare 的构建设置没有自动安装 npm 依赖，可将 Build command 改为：
+### 4. 设置部署环境变量
 
-```bash
-npm ci && npm run build
-```
+部署成功后，进入 **Workers & Pages → 对应 Worker → Settings → Variables and Secrets**，在生产环境新增一个 Secret：
 
-### 3. 配置 Worker Secrets 和变量
-
-部署成功后，进入 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Variables and Secrets，添加：
-
-Secrets：
-
-| 名称 | 说明 |
+| 名称 | 用途 |
 | --- | --- |
-| `ADMIN_PASSWORD` | 管理后台登录密码 |
-| `SESSION_SECRET` | 随机长字符串，用于签名 HttpOnly Cookie |
+| `ADMIN_PASSWORD` | `/admin` 管理后台的登录密码 |
+| `SESSION_SECRET` | 用于签名管理后台登录会话的随机长字符串 |
 
-Cloudflare API Token、默认域名、Zone ID 和优选 API 不需要添加到 Workers Variables/Secrets；本项目会在 `/admin` 的“全局设置”和“优选配置”中保存到 KV。Cloudflare API Token 至少需要目标 Zone 的 `Zone:Read` 和 `DNS:Edit` 权限。
+请为两个变量都选择 **Secret** 类型并在 Cloudflare 中保存，不要写入仓库文件。`SESSION_SECRET` 应使用与管理员密码不同的随机长字符串。
 
-不要把 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 或 `IP_SOURCES` 写入仓库、`wrangler.toml` 或 `.dev.vars`；这些值只能在 `/admin` 页面保存到 KV。
+### 5. 首次访问和网页配置
 
-部署后也可以直接打开 `/admin`，在“全局设置”区域编辑：
+打开 Cloudflare 分配的 Worker 地址并进入 `/admin`，使用 `ADMIN_PASSWORD` 登录。域名、Zone、Cloudflare API Token、优选 IP 来源、定时任务和 Telegram 等运行参数都在管理后台网页中配置，不需要预先写入环境变量。
 
-- `CF_API_TOKEN`：Cloudflare DNS API Token。输入框不会回显已保存的 Token，留空表示保持原值。
-- `DEFAULT_DOMAIN`：默认域名，例如 `example.com`。
-- `CF_ZONE_ID`：Cloudflare Zone ID。
-- “同步泛域名”：开启后主域名 DNS 编辑会联动更新 `*.域名`；关闭后可独立编辑主域名和泛域名，但优选 IP 同步仍会处理两者。
-- `IP_SOURCES`：在“优选配置”的“优选 API 配置”区域逐条添加、编辑或删除 API 地址，并可填写备注。
-- Telegram Bot Token、Webhook Secret 和 Telegram 用户 ID 白名单：在“Telegram Bot”区域编辑。Token 和 Secret 留空表示保持原值。
+如果要使用自己的域名，在 Worker 的 **Settings → Domains & Routes** 中添加域名或路由，并确保对应 Cloudflare Zone 已激活。需要 Telegram Webhook 时，应使用已经指向该 Worker 的 HTTPS 地址。
 
-面板保存的配置写入 KV，并优先于 Wrangler 初始变量。`DEFAULT_DOMAIN + CF_ZONE_ID` 始终作为同步目标。全局 Token 只返回“已配置”状态，不会通过管理 API 返回明文。
+### Telegram Bot（可选）
 
-### Telegram Bot DNS 管理
+Telegram Bot 不是部署必需项。部署完成后，在 `/admin` 的“全局设置 → Telegram Bot”页面填写 Bot Token、Webhook Secret 和允许操作的用户 ID，然后使用页面中的测试与 Webhook 设置按钮完成配置。Webhook 必须通过已经指向该 Worker 的 HTTPS 域名访问。
 
-1. 在 Telegram 中联系 `@BotFather`，使用 `/newbot` 创建 Bot 并复制 Bot Token。
-2. 获取自己的 Telegram 数字用户 ID（可使用可信的 ID 查询 Bot），不要填写用户名或群组名称。
-3. 登录 `/admin` → “全局设置” → “Telegram Bot”，填写 Bot Token、随机 Webhook Secret 和允许操作的用户 ID，每行一个。
-4. 点击“保存 Telegram 设置”，再点击“测试 Bot”确认 Token 有效。
-5. 点击“设置 Webhook”。系统会自动设置 Webhook 和 Telegram 菜单命令，并使用当前 Worker 地址的 `https://你的域名/telegram/webhook`。也可以单独点击“同步菜单命令”。如果之前已经设置过 Webhook，升级版本后需要重新点击一次以启用按钮回调。
+### 6. 配置自定义域名（可选）
 
-Webhook 必须能够通过 Cloudflare Worker Route 访问；如果使用自定义域名，请确保该域名的 Worker 路由已经生效。需要停用时点击“删除 Webhook”。
-
-打开 Bot 后可直接使用内联键盘：每条主域名 DNS 记录使用一行展示，域名和内容使用 Telegram 等宽代码格式，点击即可复制，记录类型保持普通文本；记录之间留出更明显的间距。DNS 列表显示总数并按序号操作，点击序号后可选择编辑或删除；编辑和删除也支持 `/edit 序号`、`/delete 序号`，操作后会返回原列表页。只有一条记录时，`/edit` 直接进入编辑，`/delete` 直接进入二次删除确认，`/update IP或域名` 直接更新该记录。编辑只选择记录类型和内容，添加记录也只选择记录类型和内容，泛记录会自动同步；删除会同步删除对应泛记录。
-
-支持以下命令：
-
-```text
-/start 或 /help
-/dns
-/add
-/edit 2
-/delete 2
-/update 1.1.1.1
-/cancel
-```
-
-Telegram 菜单会显示 `/start`、`/dns`、`/add`、`/edit`、`/delete`、`/update`、`/help` 和 `/cancel`。发送 `/dns` 后，记录按当前页从 1 开始编号；例如发送 `/edit 2` 编辑第二条，发送 `/delete 2` 删除第二条。序号选择状态保存 10 分钟，刷新或翻页后应使用最新页面中的序号。`/update` 仅支持当前可管理记录恰好为一条的场景；原有完整格式 `/dns update <记录 ID> <类型> <域名> <内容>` 仍然兼容。
-
-Bot 与管理面板共用 DNS 规则：只操作默认域名，支持 A、AAAA、CNAME；新增或编辑会自动同步对应泛记录，编辑和 `/update` 会按内容自动识别 A、AAAA 或 CNAME，CNAME 会清理两侧冲突的 A/AAAA，所有记录 TTL 固定为最低值 60 秒。未加入白名单的用户不会收到响应。
-
-### 4. 配置 Worker Routes
-
-Worker 发布后，在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Domains & Routes 中添加：
+Worker 发布后，可在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Domains & Routes 中添加：
 
 ```text
 example.com/*
@@ -141,32 +93,6 @@ example.com/*
 ```
 
 根域名与泛域名都必须经过 Worker。Cloudflare Zone 必须处于激活状态，但优选 DNS 记录本身必须保持 DNS only（灰云）。同步逻辑会强制新建记录为 `proxied: false`，并把由本管理器维护且误开代理的记录改回灰云。
-
-## 本地开发与手动备用部署
-
-需要 Node.js 18+：
-
-```bash
-npm ci
-npx wrangler login
-npm run dev
-```
-
-在 `.dev.vars` 中填写：
-
-```dotenv
-ADMIN_PASSWORD=change-me
-SESSION_SECRET=local-development-secret
-```
-
-启动后打开 `/admin`，在“全局设置”区域配置 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN`，在“优选配置”区域配置优选 API 和手动优选 IP。Telegram Bot 需要在“全局设置”中配置。
-
-如果需要绕过 GitHub 连接直接从本地发布：
-
-```bash
-npm run check
-npm run deploy
-```
 
 ## 优选 API 返回格式
 
