@@ -15,6 +15,11 @@ for (const marker of [
   "button.setAttribute('aria-current','page')",
   "if(event.key==='Tab')",
   "@media(prefers-reduced-motion:reduce)",
+  "class=\"settings-empty\"",
+  "id=\"adminPathPreview\"",
+  "telegram-credentials",
+  "cron-settings-card>.check input:checked",
+  "Token 已配置",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
