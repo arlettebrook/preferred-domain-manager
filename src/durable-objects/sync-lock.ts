@@ -25,6 +25,10 @@ export class SyncLock {
         await this.state.storage.delete("probe");
         return;
       }
+      if (Array.isArray(probe.collected.preferredRegions) && probe.collected.preferredRegions.length === 0) {
+        await this.state.storage.delete("probe");
+        return;
+      }
       if (settings.updatedAt !== probe.settingsUpdatedAt) throw new Error("优选配置已变化，本轮定时检测已取消");
       const batch = probe.collected.merged.slice(probe.cursor, probe.cursor + MAX_TCP_CHECK_ITEMS);
       if (batch.length) {

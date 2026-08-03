@@ -72,7 +72,7 @@ export async function checkTcp443Batch(ips: string[]) {
 }
 
 export async function collectPreferredIps(settings: Settings, checkTcp = false): Promise<CollectedIps> {
-  const preferredRegions = Array.isArray(settings.preferredRegions) ? settings.preferredRegions : undefined;
+  const preferredRegions = Array.isArray(settings.preferredRegions) && settings.preferredRegions.length ? settings.preferredRegions : undefined;
   const sourceResults = await Promise.all(settings.ipSources.map((source) => fetchSource(source, preferredRegions)));
   const sourceIps = dedupeIps(sourceResults.flatMap((item) => item.ips));
   const merged = dedupeIps([...settings.manualIps, ...sourceIps]);
@@ -132,6 +132,8 @@ export async function getPreferredIpSnapshot(env: Env, settings: Settings) {
   if (!snapshot || snapshot.settingsUpdatedAt !== settings.updatedAt || !snapshot.collected?.checkedTcp) return undefined;
   // Discard snapshots created before region-aware collection was introduced.
   if (!Array.isArray(snapshot.collected.availableRegions) || !Array.isArray(snapshot.collected.sources)) return undefined;
+  // Empty selection used to mean "only untagged"; it now means unrestricted, so old snapshots must be rebuilt.
+  if (Array.isArray(snapshot.collected.preferredRegions) && snapshot.collected.preferredRegions.length === 0) return undefined;
   if (snapshot.collected.checkedCount !== snapshot.collected.merged.length || snapshot.collected.skippedCount !== 0) return undefined;
   const checkedAt = Date.parse(snapshot.checkedAt);
   if (!Number.isFinite(checkedAt) || Date.now() - checkedAt > PREFERRED_IP_CACHE_TTL_MS) return undefined;

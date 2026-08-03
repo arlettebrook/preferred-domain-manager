@@ -84,7 +84,7 @@ export async function getSettings(env: Env): Promise<Settings> {
     return {
       ...saved,
       domains,
-      preferredRegions: Array.isArray(saved.preferredRegions) ? saved.preferredRegions : undefined,
+      preferredRegions: Array.isArray(saved.preferredRegions) && saved.preferredRegions.length ? saved.preferredRegions : undefined,
       adminPath: effectiveAdminPath(saved),
       defaultDomain: active?.domain ?? saved.defaultDomain ?? legacyZone?.domain ?? "",
       cfZoneId: active?.zoneId ?? saved.cfZoneId ?? legacyZone?.zoneId ?? "",

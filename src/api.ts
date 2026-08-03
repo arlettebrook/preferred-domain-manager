@@ -32,7 +32,8 @@ function normalizeIpSources(input: unknown, fallback: IpSource[]) {
 function normalizePreferredRegions(input: unknown) {
   if (input === null || input === undefined) return undefined;
   if (!Array.isArray(input)) throw new HttpError(400, "优选地区必须是数组或 null");
-  return [...new Set(input.map((item) => String(item).trim().toUpperCase()).filter((item) => /^[A-Z]{2,12}$/.test(item)))].sort();
+  const regions = [...new Set(input.map((item) => String(item).trim().toUpperCase()).filter((item) => /^[A-Z]{2,12}$/.test(item)))].sort();
+  return regions.length ? regions : undefined;
 }
 
 function probeStub(env: Env) {
@@ -44,7 +45,7 @@ function cronStub(env: Env) {
 }
 
 function isRegionAwareCollected(value: CollectedIps | undefined): value is CollectedIps {
-  return Boolean(value && Array.isArray(value.availableRegions) && Array.isArray(value.sources));
+  return Boolean(value && Array.isArray(value.availableRegions) && Array.isArray(value.sources) && !(Array.isArray(value.preferredRegions) && value.preferredRegions.length === 0));
 }
 
 function createRegionCatalog(collected: CollectedIps): RegionCatalog {
