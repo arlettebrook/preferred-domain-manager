@@ -11,7 +11,8 @@ for (const marker of ['region-invert', 'region-select-common', 'regionSearch']) 
 for (const marker of [
   ".login{width:100%;max-width:440px;min-width:0}",
   "if(message==='未登录'){setStatus($('#loginStatus'),'')",
-  "themeButton.dataset.icon=light?'☾':'☼'",
+  "button.querySelector('.theme-icon')",
+  ".top-actions #theme:before{display:none!important",
   "button.setAttribute('aria-current','page')",
   "if(event.key==='Tab')",
   "@media(prefers-reduced-motion:reduce)",
@@ -22,6 +23,7 @@ for (const marker of [
   "saveHomeRedirect",
   "id='githubProject'",
   "githubProjectUrl='https://github.com/arlettebrook/preferred-domain-manager'",
+  "class=\"github-mark\"",
   "telegram-credentials",
   "cron-settings-card>.check input:checked",
   "Token 已配置",
