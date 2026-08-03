@@ -9,6 +9,7 @@ for (const marker of ['region-invert', 'region-select-common', 'regionSearch']) 
   if (source.includes(marker)) throw new Error(`管理页仍包含已移除的地区增强功能：${marker}`);
 }
 for (const marker of [
+  'rel="icon" href="/favicon.svg"',
   ".login{width:100%;max-width:440px;min-width:0}",
   "if(message==='未登录'){setStatus($('#loginStatus'),'')",
   "button.querySelector('.theme-icon')",
@@ -60,6 +61,7 @@ for (const marker of [
 const landingFile = new URL("../src/ui/landing-page.ts", import.meta.url);
 const landingSource = readFileSync(landingFile, "utf8");
 for (const marker of [
+  'rel="icon" href="/favicon.svg"',
   'id="hero-title"',
   'id="capabilities"',
   'class="preview"',
@@ -76,5 +78,15 @@ for (const marker of [
   'escapeHtml(adminPath)',
 ]) {
   if (!landingSource.includes(marker)) throw new Error(`默认主页缺少增强标记：${marker}`);
+}
+const faviconFile = new URL("../src/ui/favicon.ts", import.meta.url);
+const faviconSource = readFileSync(faviconFile, "utf8");
+for (const marker of ['viewBox="0 0 64 64"', '#6b82ff', '#956fff', '>优</text>']) {
+  if (!faviconSource.includes(marker)) throw new Error(`网站图标缺少品牌标记：${marker}`);
+}
+const mainFile = new URL("../src/main.ts", import.meta.url);
+const mainSource = readFileSync(mainFile, "utf8");
+for (const marker of ['url.pathname === "/favicon.svg"', 'url.pathname === "/favicon.ico"', '"content-type": "image/svg+xml; charset=utf-8"']) {
+  if (!mainSource.includes(marker)) throw new Error(`网站图标路由缺少标记：${marker}`);
 }
 console.log(`Embedded admin scripts syntax: ok (${scripts.length + 1})`);

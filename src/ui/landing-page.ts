@@ -10,6 +10,8 @@ export function landingPage(host: string, adminPath = "/admin") {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#08101f">
 <meta name="description" content="Preferred Domain Manager：集中管理 Cloudflare DNS、优选 IP、自动同步与 Telegram Bot。">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="shortcut icon" href="/favicon.ico">
 <title>优选域名管理</title>
 <style>
 :root{color-scheme:dark;--bg:#070e1b;--panel:#0f1a2d;--panel-strong:#14223a;--soft:#101d32;--text:#f3f6ff;--muted:#93a4c0;--muted-2:#7183a1;--border:#253957;--border-strong:#385078;--primary:#7187ff;--primary-2:#956fff;--primary-soft:#7187ff1a;--ok:#51d6a3;--shadow:0 28px 90px #0007;--radius:24px}
