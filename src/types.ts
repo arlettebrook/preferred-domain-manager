@@ -22,6 +22,7 @@ export interface DomainProfile {
   id: string;
   domain: string;
   zoneId: string;
+  autoSyncEnabled?: boolean;
   syncWildcard?: boolean;
   apiToken?: string;
   hasApiToken?: boolean;

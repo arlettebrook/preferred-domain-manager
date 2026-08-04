@@ -5,6 +5,11 @@ import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from 
 import { Env } from "../types";
 import { syncZone } from "./cloudflare-dns";
 
+interface RunSyncOptions {
+  domainId?: string;
+  automatic?: boolean;
+}
+
 export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise<T> {
   const stub = env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName(SYNC_LOCK_NAME));
   const response = await stub.fetch("https://sync-lock/acquire", { method: "POST", body: JSON.stringify({ ttl: 15 * 60 * 1000 }) });
@@ -16,8 +21,9 @@ export async function withSyncLock<T>(env: Env, task: () => Promise<T>): Promise
   }
 }
 
-export async function runSync(env: Env, domainId?: string) {
+export async function runSync(env: Env, options: RunSyncOptions = {}) {
   return withSyncLock(env, async () => {
+    const { domainId, automatic = false } = options;
     const settings = await getSettings(env);
     const profiles = domainProfiles(settings);
     const targets = domainId
@@ -25,11 +31,13 @@ export async function runSync(env: Env, domainId?: string) {
           const target = effectiveTarget(settings, domainId);
           return target ? [{ id: domainId, target }] : [];
         })()
-      : profiles.map((profile) => ({
+      : automatic
+        ? profiles.filter((profile) => profile.autoSyncEnabled === true).map((profile) => ({
           id: profile.id,
           target: { zoneId: profile.zoneId, domain: profile.domain, syncWildcard: profile.syncWildcard !== false },
-        }));
-    if (!targets.length) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "没有配置默认域名或 Zone ID");
+        }))
+        : [];
+    if (!targets.length) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : automatic ? "没有域名启用自动优选同步" : "同步请求必须指定域名");
     const snapshot = await getPreferredIpSnapshot(env, settings);
     if (!snapshot) throw new HttpError(428, "优选 IP 检测结果不存在或已过期，请先点击“检测优选 IP”");
     const collected = snapshot.collected;
@@ -49,6 +57,7 @@ export async function runSync(env: Env, domainId?: string) {
     const failed = results.filter((entry) => !entry.ok);
     return {
       ok: failed.length === 0,
+      automatic,
       at: new Date().toISOString(),
       candidates: collected.merged.length,
       reachable: collected.reachable,

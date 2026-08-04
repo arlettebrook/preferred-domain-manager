@@ -1,6 +1,6 @@
 import { MAX_TCP_CHECK_ITEMS } from "../config";
 import { checkTcp443Batch, collectPreferredIps, savePreferredIpSnapshot } from "../services/ip-sources";
-import { getSettings } from "../services/settings";
+import { domainProfiles, getSettings } from "../services/settings";
 import { runSync } from "../services/sync";
 import { CollectedIps, Env } from "../types";
 
@@ -51,7 +51,7 @@ export class SyncLock {
         skippedCount: 0,
       };
       await savePreferredIpSnapshot(this.env, settings, collected);
-      const result = await runSync(this.env);
+      const result = await runSync(this.env, { automatic: true });
       const dnsChanges = result.results.reduce((summary, entry) => {
         if (!entry.ok || !entry.result) return summary;
         summary.created += entry.result.created ?? 0;
@@ -76,6 +76,9 @@ export class SyncLock {
       if (existing?.scheduled) return Response.json({ ok: true, started: false, reason: "already-running" });
       const settings = await getSettings(this.env);
       if (settings.cronEnabled === false) return Response.json({ ok: true, started: false, reason: "disabled" });
+      const profiles = domainProfiles(settings);
+      const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
+      if (!enabledDomainCount) return Response.json({ ok: true, started: false, reason: "no-enabled-domains", enabledDomainCount, totalDomainCount: profiles.length });
       const collected = await collectPreferredIps(settings, false);
       if (!collected.merged.length) {
         await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: "没有可检测的优选 IP" });
@@ -84,14 +87,16 @@ export class SyncLock {
       const probe: ProbeState = { settingsUpdatedAt: settings.updatedAt, collected, cursor: 0, reachable: [], updatedAt: Date.now(), scheduled: true };
       await this.state.storage.put("probe", probe);
       await this.state.storage.setAlarm(Date.now() + 1000);
-      return Response.json({ ok: true, started: true, total: collected.merged.length });
+      return Response.json({ ok: true, started: true, total: collected.merged.length, enabledDomainCount, totalDomainCount: profiles.length });
     }
     if (path === "/cron/status") {
       const settings = await getSettings(this.env);
+      const profiles = domainProfiles(settings);
+      const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
       const probe = await this.state.storage.get<ProbeState>("probe");
       const lastResult = await this.state.storage.get<Record<string, unknown>>("lastCronResult");
       const nextAlarm = await this.state.storage.getAlarm();
-      return Response.json({ enabled: settings.cronEnabled !== false, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
+      return Response.json({ enabled: settings.cronEnabled !== false, enabledDomainCount, totalDomainCount: profiles.length, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
     }
     if (path === "/cron/cancel" && request.method === "POST") {
       const probe = await this.state.storage.get<ProbeState>("probe");

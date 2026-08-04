@@ -1,18 +1,18 @@
 # 优选域名管理面板
 
-Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并去重并检测 TCP 443，只把通过检测的 IPv4/IPv6 以 DNS only（灰云）记录同步到一个默认 Cloudflare Zone，同时覆盖根域名和泛解析。
+Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并去重并检测 TCP 443，只把通过检测的 IPv4/IPv6 以 DNS only（灰云）记录同步到已启用自动同步的 Cloudflare Zone，并支持手动选择单个域名同步。
 
 ## 功能
 
 - `/` 首页、`/admin` 管理后台，管理员会话使用签名的 `HttpOnly` Cookie。
-- 支持管理多个 Cloudflare Zone；每个域名分别配置域名、Zone ID 和 API Token。
+- 支持管理多个 Cloudflare Zone；每个域名分别配置域名、Zone ID、API Token 和自动优选同步开关。
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
 - DNS 编辑会展示当前 Zone 的全部记录；仅允许操作主域名的 `A`、`AAAA`、`CNAME`，其他记录以只读方式展示。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
 - 每个域名可独立设置“同步泛域名”开关：开启时主域名变更会自动配对 `*.域名`，关闭时两者独立管理；手动/定时优选 IP 同步和 Telegram 仍会处理根域名与泛域名。记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
-- Cron 可在“全局设置”中启用或关闭；启用后每 30 分钟自动抓取全部候选 IP，通过 Durable Object Alarm 分批完成 TCP 443 检测，保存完整结果后自动同步 DNS。定时同步与管理员手动同步共用锁，避免重复更新。
+- Cron 可在“全局设置”中启用或关闭；启用后每 30 分钟自动抓取全部候选 IP，通过 Durable Object Alarm 分批完成 TCP 443 检测，只同步单独开启“自动优选同步”的域名。手动同步不受该开关影响，定时同步与管理员手动同步共用锁，避免重复更新。
 - 暗黑模式。
 - Telegram Bot DNS 管理：白名单用户可通过内联键盘查看、新建、修改和删除 DNS 记录，也兼容文本命令。
 
@@ -92,6 +92,13 @@ docs/development.md              开发结构与修改指南
 - **Permissions**：`Zone → DNS → Edit` 和 `Zone → Zone → Read`。
 - **Zone Resources**：`Include → Specific zone → 选择要管理的域名`。
 - 创建完成后立即复制 Token；Cloudflare 只会完整显示一次。每个域名可以使用各自限定 Zone 的 Token。
+
+每个域名还可以独立配置两个同步开关：
+
+- **自动优选同步**：决定该域名是否参加每 30 分钟的定时同步；旧配置升级后默认关闭，需要按需逐个开启。
+- **同步泛域名**：决定同步主域名时是否自动配对 `*.域名`。该选项与自动优选同步相互独立。
+
+管理面板中的手动同步始终只处理当前选择的域名，不受“自动优选同步”开关影响。
 
 这里的 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 是域名配置项的变量名称，当前版本应通过管理后台填写，而不是添加到 Worker 的 **Variables and Secrets**。Worker 部署环境中只需要配置前文的 `ADMIN_PASSWORD` 和 `SESSION_SECRET`。
 

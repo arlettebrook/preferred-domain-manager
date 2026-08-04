@@ -30,6 +30,7 @@ function normalizeDomainProfiles(values: unknown[]): DomainProfile[] {
       id,
       domain,
       zoneId,
+      autoSyncEnabled: item.autoSyncEnabled === true,
       // Existing profiles used implicit wildcard synchronization. Keep that behavior for migrated data.
       syncWildcard: isWildcardSyncEnabled(item.syncWildcard),
       ...(apiToken ? { apiToken } : {}),
@@ -42,7 +43,7 @@ export function domainProfiles(settings: Pick<Settings, "domains" | "defaultDoma
   const configured = Array.isArray(settings.domains) ? settings.domains : [];
   if (configured.length) return normalizeDomainProfiles(configured);
   if (settings.defaultDomain && settings.cfZoneId) {
-    return normalizeDomainProfiles([{ id: profileId(settings.defaultDomain), domain: settings.defaultDomain, zoneId: settings.cfZoneId, syncWildcard: true, apiToken: settings.cfApiToken }]);
+    return normalizeDomainProfiles([{ id: profileId(settings.defaultDomain), domain: settings.defaultDomain, zoneId: settings.cfZoneId, autoSyncEnabled: false, syncWildcard: true, apiToken: settings.cfApiToken }]);
   }
   return [];
 }

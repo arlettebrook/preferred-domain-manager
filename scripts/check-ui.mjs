@@ -36,6 +36,9 @@ for (const marker of [
   "localStorage.getItem(activeDomainStorageKey)",
   "executionPanel?.remove()",
   "preferred-action-card",
+  "auto-sync-enabled",
+  "自动优选同步",
+  "自动同步域名：",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }

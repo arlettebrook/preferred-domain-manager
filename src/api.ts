@@ -102,6 +102,7 @@ async function saveConfig(request: Request, env: Env) {
     return {
       ...item,
       apiToken,
+      autoSyncEnabled: item.autoSyncEnabled !== undefined ? item.autoSyncEnabled === true : previousProfile?.autoSyncEnabled === true,
       syncWildcard: item.syncWildcard !== undefined ? item.syncWildcard !== false : previousProfile?.syncWildcard !== false,
     };
   });
@@ -112,7 +113,7 @@ async function saveConfig(request: Request, env: Env) {
     const activeIndex = domains.findIndex((item) => item.domain === normalizeDomain(previous.defaultDomain || ""));
     const legacyToken = typeof input.cfApiToken === "string" && input.cfApiToken ? input.cfApiToken : previous.cfApiToken;
     if (activeIndex >= 0) domains[activeIndex] = { ...domains[activeIndex], domain: requestedDomain, zoneId: requestedZoneId, ...(legacyToken ? { apiToken: legacyToken } : {}) };
-    else domains = [{ id: `domain:${requestedDomain}`, domain: requestedDomain, zoneId: requestedZoneId, syncWildcard: true, ...(legacyToken ? { apiToken: legacyToken } : {}) }, ...domains];
+    else domains = [{ id: `domain:${requestedDomain}`, domain: requestedDomain, zoneId: requestedZoneId, autoSyncEnabled: false, syncWildcard: true, ...(legacyToken ? { apiToken: legacyToken } : {}) }, ...domains];
   }
   const missingToken = domains.find((profile) => !profile.apiToken);
   if (missingToken) throw new HttpError(400, `请为 ${missingToken.domain} 配置独立的 Cloudflare API Token`);
@@ -310,7 +311,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/cron/run" && request.method === "POST") {
     const response = await cronStub(env).fetch("https://probe/cron/start", { method: "POST" });
     const result = await response.json<{ reason?: string }>();
-    if (!response.ok) throw new HttpError(response.status, result.reason === "no-candidates" ? "没有可检测的优选 IP" : "启动定时任务失败");
+    if (!response.ok) throw new HttpError(response.status, result.reason === "no-candidates" ? "没有可检测的优选 IP" : result.reason === "no-enabled-domains" ? "请先为至少一个域名开启自动优选同步" : "启动定时任务失败");
     return json(result);
   }
   if (url.pathname === "/api/ips/cancel" && request.method === "POST") {
@@ -323,7 +324,7 @@ export async function handleApi(request: Request, env: Env) {
   }
   if (url.pathname === "/api/sync" && request.method === "POST") {
     try {
-      return json(await runSync(env, url.searchParams.get("domainId") || undefined));
+      return json(await runSync(env, { domainId: url.searchParams.get("domainId") || undefined }));
     } catch (error) {
       if (error instanceof LockBusyError) return json({ ok: false, error: error.message }, 409);
       throw error;
