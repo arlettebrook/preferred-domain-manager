@@ -13,7 +13,7 @@ const settings = read("src/services/settings.ts");
 const api = read("src/api.ts");
 const sync = read("src/services/sync.ts");
 const lock = read("src/durable-objects/sync-lock.ts");
-const ui = read("src/ui/admin-page.ts");
+const ui = read("src/ui/admin-page.ts") + read("src/ui/admin-core-script.ts") + read("src/ui/admin-domain-script.ts");
 
 const cronConfigRoute = api.slice(api.indexOf('if (url.pathname === "/api/cron/config"'), api.indexOf('if (url.pathname === "/api/ip-sources"'));
 if (cronConfigRoute.includes("PDM_KV.put")) throw new Error("定时任务开关仍同时写入 KV 与 Durable Object");

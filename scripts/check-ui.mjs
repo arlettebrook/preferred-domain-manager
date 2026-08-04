@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs";
 
 const file = new URL("../src/ui/admin-page.ts", import.meta.url);
 const source = readFileSync(file, "utf8");
+const coreSource = readFileSync(new URL("../src/ui/admin-core-script.ts", import.meta.url), "utf8");
+const domainSource = readFileSync(new URL("../src/ui/admin-domain-script.ts", import.meta.url), "utf8");
+const adminSource = source + coreSource + domainSource;
 for (const marker of ['id="getRegions"', 'id="saveRegions"', '/api/ips/regions', '/api/ips/regions/config', 'region-select-all', 'region-clear-all', 'loadRegionCatalog', 'savedPreferredRegions', 'regionSelectionChanged', 'catalogFetchedAt', "#saveRegions')?.addEventListener('click',saveRegionConfig"]) {
-  if (!source.includes(marker)) throw new Error(`管理页缺少地区获取功能标记：${marker}`);
+  if (!adminSource.includes(marker)) throw new Error(`管理页缺少地区获取功能标记：${marker}`);
 }
 for (const marker of ['region-invert', 'region-select-common', 'regionSearch']) {
-  if (source.includes(marker)) throw new Error(`管理页仍包含已移除的地区增强功能：${marker}`);
+  if (adminSource.includes(marker)) throw new Error(`管理页仍包含已移除的地区增强功能：${marker}`);
 }
 for (const marker of [
   'rel="icon" href="/favicon.svg"',
@@ -45,17 +48,21 @@ for (const marker of [
   "开关切换后立即生效",
   "按 Worker Cron 计划（每 30 分钟）",
 ]) {
-  if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
+  if (!adminSource.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
 for (const marker of ['id="output"', '#output', '查看完整执行数据', 'executionPanel']) {
-  if (source.includes(marker)) throw new Error(`管理页仍包含已移除的完整执行数据逻辑：${marker}`);
+  if (adminSource.includes(marker)) throw new Error(`管理页仍包含已移除的完整执行数据逻辑：${marker}`);
 }
 for (const marker of ['id="saveCron"', '保存定时任务设置', "setBusy('#saveCron'", "$('#saveCron').addEventListener"]) {
-  if (source.includes(marker)) throw new Error(`管理页仍包含多余的定时任务保存按钮逻辑：${marker}`);
+  if (adminSource.includes(marker)) throw new Error(`管理页仍包含多余的定时任务保存按钮逻辑：${marker}`);
 }
-const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1].replace(/\$\{adminLayoutScript\}/g, ""));
+for (const [name, moduleSource] of [["核心", coreSource], ["域名", domainSource]]) {
+  const match = moduleSource.match(/String\.raw`([\s\S]*)`(?:\.trimEnd\(\)\s*\+\s*"\\n")?;\s*$/);
+  if (!match) throw new Error(`无法找到管理页${name}脚本`);
+  new Function(match[1].replace(/\$\{adminLayoutScript\}/g, ""));
+}
+const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]).filter((script) => !script.includes("${adminCoreScript}") && !script.includes("${adminDomainScript}"));
 
-if (!scripts.length) throw new Error("无法找到管理页内嵌脚本");
 scripts.forEach((script) => new Function(script));
 
 const layoutFile = new URL("../src/ui/admin-layout.ts", import.meta.url);
@@ -111,4 +118,4 @@ const mainSource = readFileSync(mainFile, "utf8");
 for (const marker of ['url.pathname === "/favicon.svg"', 'url.pathname === "/favicon.ico"', '"content-type": "image/svg+xml; charset=utf-8"']) {
   if (!mainSource.includes(marker)) throw new Error(`网站图标路由缺少标记：${marker}`);
 }
-console.log(`Embedded admin scripts syntax: ok (${scripts.length + 1})`);
+console.log(`Embedded admin scripts syntax: ok (${scripts.length + 3})`);
