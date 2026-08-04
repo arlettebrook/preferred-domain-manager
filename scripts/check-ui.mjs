@@ -42,6 +42,7 @@ for (const marker of [
   "const {cronEnabled:_cronEnabled,...config}=state",
   "saveCronConfig(event.currentTarget.checked)",
   "$('#saveCron').addEventListener('click',()=>{void saveCronConfig();})",
+  "按 Worker Cron 计划（每 30 分钟）",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
