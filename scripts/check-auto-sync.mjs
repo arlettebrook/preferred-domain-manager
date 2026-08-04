@@ -20,8 +20,8 @@ for (const [name, source, markers] of [
   ["settings", settings, ["autoSyncEnabled: item.autoSyncEnabled === true", "autoSyncEnabled: false"]],
   ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false"]],
   ["sync", sync, ["automatic?: boolean", "profiles.filter((profile) => profile.autoSyncEnabled === true)", "同步请求必须指定域名", "automatic,"]],
-  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true"]],
-  ["ui", ui, ["auto-sync-enabled", "自动同步域名：", "自动优选同步"]],
+  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + 5000)"]],
+  ["ui", ui, ["auto-sync-enabled", "自动同步域名：", "自动优选同步", "let dnsLoadSequence=0", "requestId!==dnsLoadSequence", "dnsState.records=[];dnsState.loading=configured", "没有域名参与自动同步"]],
 ]) {
   for (const marker of markers) {
     if (!source.includes(marker)) throw new Error(`${name} 缺少自动同步约束：${marker}`);

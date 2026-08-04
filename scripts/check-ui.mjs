@@ -34,13 +34,15 @@ for (const marker of [
   "同步优选 IP 到 '+target.domain",
   "activeDomainStorageKey='preferred-domain-manager.active-domain-id'",
   "localStorage.getItem(activeDomainStorageKey)",
-  "executionPanel?.remove()",
   "preferred-action-card",
   "auto-sync-enabled",
   "自动优选同步",
   "自动同步域名：",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
+}
+for (const marker of ['id="output"', '#output', '查看完整执行数据', 'executionPanel']) {
+  if (source.includes(marker)) throw new Error(`管理页仍包含已移除的完整执行数据逻辑：${marker}`);
 }
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1].replace(/\$\{adminLayoutScript\}/g, ""));
 

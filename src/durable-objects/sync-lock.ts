@@ -1,4 +1,5 @@
 import { MAX_TCP_CHECK_ITEMS } from "../config";
+import { LockBusyError } from "../errors";
 import { checkTcp443Batch, collectPreferredIps, savePreferredIpSnapshot } from "../services/ip-sources";
 import { domainProfiles, getSettings } from "../services/settings";
 import { runSync } from "../services/sync";
@@ -63,6 +64,11 @@ export class SyncLock {
       await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, preferredRegions: collected.preferredRegions, dnsChanges, result });
       await this.state.storage.delete("probe");
     } catch (error) {
+      if (error instanceof LockBusyError && probe.scheduled) {
+        await this.state.storage.put("probe", { ...probe, updatedAt: Date.now() });
+        await this.state.storage.setAlarm(Date.now() + 5000);
+        return;
+      }
       await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: error instanceof Error ? error.message : "定时检测失败" });
       await this.state.storage.delete("probe");
       throw error;
