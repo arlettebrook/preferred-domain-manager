@@ -1,4 +1,4 @@
-import { CRON_CONFIG, SETTINGS_KEY } from "../config";
+import { SETTINGS_KEY } from "../config";
 import { DomainProfile, DnsTarget, Env, Settings } from "../types";
 import { DEFAULT_ADMIN_PATH, isValidAdminPath, isValidHomeRedirectUrl, normalizeAdminPath, normalizeDomain } from "../validation";
 
@@ -73,7 +73,6 @@ export function defaultSettings(): Settings {
     telegramBotToken: undefined,
     telegramAllowedUserIds: [],
     telegramWebhookSecret: undefined,
-    cronEnabled: CRON_CONFIG.defaultEnabled,
     updatedAt: new Date().toISOString(),
   };
 }

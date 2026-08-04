@@ -1,4 +1,4 @@
-import { CRON_CONFIG, MAX_TCP_CHECK_ITEMS } from "../config";
+import { CRON_CONFIG, MAX_TCP_CHECK_ITEMS, SETTINGS_KEY } from "../config";
 import { LockBusyError } from "../errors";
 import { checkTcp443Batch, collectPreferredIps, savePreferredIpSnapshot } from "../services/ip-sources";
 import { domainProfiles, getSettings } from "../services/settings";
@@ -14,21 +14,62 @@ interface ProbeState {
   scheduled?: boolean;
 }
 
+const CRON_CONFIG_SOURCES = ["api", "default", "durable-object", "legacy-kv"] as const;
+type CronConfigSource = typeof CRON_CONFIG_SOURCES[number];
+
 interface CronConfigState {
+  version: number;
   enabled: boolean;
   updatedAt: string;
+  initializedAt: string;
+  initializedFrom: CronConfigSource;
+}
+
+function isCronConfigSource(value: unknown): value is CronConfigSource {
+  return CRON_CONFIG_SOURCES.includes(value as CronConfigSource);
+}
+
+function isCurrentCronConfig(value: Partial<CronConfigState> | undefined): value is CronConfigState {
+  return value?.version === CRON_CONFIG.stateVersion
+    && typeof value.enabled === "boolean"
+    && typeof value.updatedAt === "string"
+    && typeof value.initializedAt === "string"
+    && isCronConfigSource(value.initializedFrom);
 }
 
 export class SyncLock {
   constructor(private state: DurableObjectState, private env: Env) {}
 
-  private async cronConfig(settings?: Awaited<ReturnType<typeof getSettings>>): Promise<CronConfigState> {
-    const stored = await this.state.storage.get<CronConfigState>(CRON_CONFIG.storageKey);
-    if (stored) return stored;
-    const fallback = settings ?? await getSettings(this.env);
-    const migrated: CronConfigState = { enabled: fallback.cronEnabled !== false, updatedAt: fallback.updatedAt };
-    await this.state.storage.put(CRON_CONFIG.storageKey, migrated);
-    return migrated;
+  private async cronConfig(): Promise<CronConfigState> {
+    const stored = await this.state.storage.get<Partial<CronConfigState>>(CRON_CONFIG.storageKey);
+    if (isCurrentCronConfig(stored)) return stored;
+    let initialized: CronConfigState | undefined;
+    await this.state.blockConcurrencyWhile(async () => {
+      const current = await this.state.storage.get<Partial<CronConfigState>>(CRON_CONFIG.storageKey);
+      if (current) {
+        const now = new Date().toISOString();
+        initialized = {
+          version: CRON_CONFIG.stateVersion,
+          enabled: typeof current.enabled === "boolean" ? current.enabled : CRON_CONFIG.defaultEnabled,
+          updatedAt: typeof current.updatedAt === "string" && current.updatedAt ? current.updatedAt : now,
+          initializedAt: typeof current.initializedAt === "string" && current.initializedAt ? current.initializedAt : now,
+          initializedFrom: isCronConfigSource(current.initializedFrom) ? current.initializedFrom : "durable-object",
+        };
+      } else {
+        const legacy = await this.env.PDM_KV.get<{ cronEnabled?: unknown; updatedAt?: unknown }>(SETTINGS_KEY, "json");
+        const now = new Date().toISOString();
+        const hasLegacyValue = typeof legacy?.cronEnabled === "boolean";
+        initialized = {
+          version: CRON_CONFIG.stateVersion,
+          enabled: hasLegacyValue ? legacy.cronEnabled as boolean : CRON_CONFIG.defaultEnabled,
+          updatedAt: hasLegacyValue && typeof legacy?.updatedAt === "string" && legacy.updatedAt ? legacy.updatedAt : now,
+          initializedAt: now,
+          initializedFrom: hasLegacyValue ? "legacy-kv" : "default",
+        };
+      }
+      await this.state.storage.put(CRON_CONFIG.storageKey, initialized);
+    });
+    return initialized!;
   }
 
   async alarm() {
@@ -36,7 +77,7 @@ export class SyncLock {
     if (!probe?.scheduled) return;
     try {
       const settings = await getSettings(this.env);
-      const cronConfig = await this.cronConfig(settings);
+      const cronConfig = await this.cronConfig();
       if (!cronConfig.enabled) {
         await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
         return;
@@ -99,9 +140,14 @@ export class SyncLock {
     if (path === CRON_CONFIG.routes.config && request.method === "PUT") {
       const body = await request.json<{ enabled?: unknown; updatedAt?: unknown }>();
       if (typeof body.enabled !== "boolean") return Response.json({ error: "定时任务开关必须是布尔值" }, { status: 400 });
+      const previous = await this.state.storage.get<Partial<CronConfigState>>(CRON_CONFIG.storageKey);
+      const now = new Date().toISOString();
       const config: CronConfigState = {
+        version: CRON_CONFIG.stateVersion,
         enabled: body.enabled,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
+        initializedAt: typeof previous?.initializedAt === "string" && previous.initializedAt ? previous.initializedAt : now,
+        initializedFrom: isCronConfigSource(previous?.initializedFrom) ? previous.initializedFrom : "api",
       };
       await this.state.storage.put(CRON_CONFIG.storageKey, config);
       if (!config.enabled) {
@@ -114,7 +160,7 @@ export class SyncLock {
       const existing = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);
       if (existing?.scheduled) return Response.json({ ok: true, started: false, reason: "already-running" });
       const settings = await getSettings(this.env);
-      const cronConfig = await this.cronConfig(settings);
+      const cronConfig = await this.cronConfig();
       if (!cronConfig.enabled) return Response.json({ ok: true, started: false, reason: "disabled" });
       const profiles = domainProfiles(settings);
       const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
@@ -131,7 +177,7 @@ export class SyncLock {
     }
     if (path === CRON_CONFIG.routes.status) {
       const settings = await getSettings(this.env);
-      const cronConfig = await this.cronConfig(settings);
+      const cronConfig = await this.cronConfig();
       const profiles = domainProfiles(settings);
       const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
       const probe = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);

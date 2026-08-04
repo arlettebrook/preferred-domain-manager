@@ -9,6 +9,7 @@ export const CRON_CONFIG = {
   intervalLabel: `${CRON_INTERVAL_MINUTES} 分钟`,
   intervalMs: CRON_INTERVAL_MINUTES * 60 * 1000,
   defaultEnabled: true,
+  stateVersion: 1,
   durableObjectName: "preferred-ip-cron",
   storageKey: "cronConfig",
   lastResultStorageKey: "lastCronResult",
