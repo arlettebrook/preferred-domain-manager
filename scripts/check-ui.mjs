@@ -28,6 +28,10 @@ for (const marker of [
   "telegram-credentials",
   "cron-settings-card>.check input:checked",
   "Token 已配置",
+  "id=\"preferredDomain\"",
+  "手动同步只更新 ",
+  "'/api/sync?domainId='+encodeURIComponent(targetId)",
+  "同步优选 IP 到 '+target.domain",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
