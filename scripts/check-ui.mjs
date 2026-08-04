@@ -38,6 +38,10 @@ for (const marker of [
   "auto-sync-enabled",
   "自动优选同步",
   "自动同步域名：",
+  "cronToggleDirty",
+  "cronConfigSaving",
+  "cronStatusSequence",
+  "定时任务设置已更改，保存后生效",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
