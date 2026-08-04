@@ -6,6 +6,7 @@ import { Env } from "./types";
 import { SyncLock } from "./durable-objects/sync-lock";
 import { handleTelegramWebhook } from "./services/telegram";
 import { effectiveAdminPath, effectiveHomeRedirect, getSettings } from "./services/settings";
+import { CRON_CONFIG } from "./config";
 
 export { SyncLock };
 
@@ -39,8 +40,8 @@ export default {
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const stub = env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
-    ctx.waitUntil(stub.fetch("https://probe/cron/start", { method: "POST" }).then(async (response) => {
+    const stub = env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName(CRON_CONFIG.durableObjectName));
+    ctx.waitUntil(stub.fetch(`https://probe${CRON_CONFIG.routes.start}`, { method: "POST" }).then(async (response) => {
       if (!response.ok) throw new Error(`scheduled probe start failed: ${response.status} ${await response.text()}`);
     }).catch((error) => console.error("scheduled preferred IP workflow failed", error)));
   },

@@ -1,4 +1,4 @@
-import { MAX_TCP_CHECK_ITEMS } from "../config";
+import { CRON_CONFIG, MAX_TCP_CHECK_ITEMS } from "../config";
 import { LockBusyError } from "../errors";
 import { checkTcp443Batch, collectPreferredIps, savePreferredIpSnapshot } from "../services/ip-sources";
 import { domainProfiles, getSettings } from "../services/settings";
@@ -23,26 +23,26 @@ export class SyncLock {
   constructor(private state: DurableObjectState, private env: Env) {}
 
   private async cronConfig(settings?: Awaited<ReturnType<typeof getSettings>>): Promise<CronConfigState> {
-    const stored = await this.state.storage.get<CronConfigState>("cronConfig");
+    const stored = await this.state.storage.get<CronConfigState>(CRON_CONFIG.storageKey);
     if (stored) return stored;
     const fallback = settings ?? await getSettings(this.env);
     const migrated: CronConfigState = { enabled: fallback.cronEnabled !== false, updatedAt: fallback.updatedAt };
-    await this.state.storage.put("cronConfig", migrated);
+    await this.state.storage.put(CRON_CONFIG.storageKey, migrated);
     return migrated;
   }
 
   async alarm() {
-    const probe = await this.state.storage.get<ProbeState>("probe");
+    const probe = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);
     if (!probe?.scheduled) return;
     try {
       const settings = await getSettings(this.env);
       const cronConfig = await this.cronConfig(settings);
       if (!cronConfig.enabled) {
-        await this.state.storage.delete("probe");
+        await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
         return;
       }
       if (Array.isArray(probe.collected.preferredRegions) && probe.collected.preferredRegions.length === 0) {
-        await this.state.storage.delete("probe");
+        await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
         return;
       }
       if (settings.updatedAt !== probe.settingsUpdatedAt) throw new Error("优选配置已变化，本轮定时检测已取消");
@@ -55,8 +55,8 @@ export class SyncLock {
           reachable: [...new Set([...probe.reachable, ...checked.ips])],
           updatedAt: Date.now(),
         };
-        await this.state.storage.put("probe", updated);
-        await this.state.storage.setAlarm(Date.now() + 1000);
+        await this.state.storage.put(CRON_CONFIG.probeStorageKey, updated);
+        await this.state.storage.setAlarm(Date.now() + CRON_CONFIG.alarmDelayMs);
         return;
       }
       const collected: CollectedIps = {
@@ -76,42 +76,42 @@ export class SyncLock {
         summary.kept += entry.result.kept ?? 0;
         return summary;
       }, { created: 0, updated: 0, deleted: 0, kept: 0 });
-      await this.state.storage.put("lastCronResult", { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, preferredRegions: collected.preferredRegions, dnsChanges, result });
-      await this.state.storage.delete("probe");
+      await this.state.storage.put(CRON_CONFIG.lastResultStorageKey, { ok: result.ok, at: new Date().toISOString(), checkedCount: collected.checkedCount, reachableCount: collected.reachable.length, preferredRegions: collected.preferredRegions, dnsChanges, result });
+      await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
     } catch (error) {
       if (error instanceof LockBusyError && probe.scheduled) {
-        await this.state.storage.put("probe", { ...probe, updatedAt: Date.now() });
-        await this.state.storage.setAlarm(Date.now() + 5000);
+        await this.state.storage.put(CRON_CONFIG.probeStorageKey, { ...probe, updatedAt: Date.now() });
+        await this.state.storage.setAlarm(Date.now() + CRON_CONFIG.busyRetryDelayMs);
         return;
       }
-      await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: error instanceof Error ? error.message : "定时检测失败" });
-      await this.state.storage.delete("probe");
+      await this.state.storage.put(CRON_CONFIG.lastResultStorageKey, { ok: false, at: new Date().toISOString(), error: error instanceof Error ? error.message : "定时检测失败" });
+      await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
       throw error;
     }
   }
 
   async fetch(request: Request) {
     const path = new URL(request.url).pathname;
-    if (path === "/cron/config" && request.method === "GET") {
+    if (path === CRON_CONFIG.routes.config && request.method === "GET") {
       const config = await this.cronConfig();
       return Response.json({ cronEnabled: config.enabled, updatedAt: config.updatedAt });
     }
-    if (path === "/cron/config" && request.method === "PUT") {
+    if (path === CRON_CONFIG.routes.config && request.method === "PUT") {
       const body = await request.json<{ enabled?: unknown; updatedAt?: unknown }>();
       if (typeof body.enabled !== "boolean") return Response.json({ error: "定时任务开关必须是布尔值" }, { status: 400 });
       const config: CronConfigState = {
         enabled: body.enabled,
         updatedAt: new Date().toISOString(),
       };
-      await this.state.storage.put("cronConfig", config);
+      await this.state.storage.put(CRON_CONFIG.storageKey, config);
       if (!config.enabled) {
-        await this.state.storage.delete("probe");
+        await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
         await this.state.storage.deleteAlarm();
       }
       return Response.json({ ok: true, cronEnabled: config.enabled, updatedAt: config.updatedAt });
     }
-    if (path === "/cron/start" && request.method === "POST") {
-      const existing = await this.state.storage.get<ProbeState>("probe");
+    if (path === CRON_CONFIG.routes.start && request.method === "POST") {
+      const existing = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);
       if (existing?.scheduled) return Response.json({ ok: true, started: false, reason: "already-running" });
       const settings = await getSettings(this.env);
       const cronConfig = await this.cronConfig(settings);
@@ -121,33 +121,33 @@ export class SyncLock {
       if (!enabledDomainCount) return Response.json({ ok: true, started: false, reason: "no-enabled-domains", enabledDomainCount, totalDomainCount: profiles.length });
       const collected = await collectPreferredIps(settings, false);
       if (!collected.merged.length) {
-        await this.state.storage.put("lastCronResult", { ok: false, at: new Date().toISOString(), error: "没有可检测的优选 IP" });
+        await this.state.storage.put(CRON_CONFIG.lastResultStorageKey, { ok: false, at: new Date().toISOString(), error: "没有可检测的优选 IP" });
         return Response.json({ ok: false, started: false, reason: "no-candidates" }, { status: 422 });
       }
       const probe: ProbeState = { settingsUpdatedAt: settings.updatedAt, collected, cursor: 0, reachable: [], updatedAt: Date.now(), scheduled: true };
-      await this.state.storage.put("probe", probe);
-      await this.state.storage.setAlarm(Date.now() + 1000);
+      await this.state.storage.put(CRON_CONFIG.probeStorageKey, probe);
+      await this.state.storage.setAlarm(Date.now() + CRON_CONFIG.alarmDelayMs);
       return Response.json({ ok: true, started: true, total: collected.merged.length, enabledDomainCount, totalDomainCount: profiles.length });
     }
-    if (path === "/cron/status") {
+    if (path === CRON_CONFIG.routes.status) {
       const settings = await getSettings(this.env);
       const cronConfig = await this.cronConfig(settings);
       const profiles = domainProfiles(settings);
       const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
-      const probe = await this.state.storage.get<ProbeState>("probe");
-      const lastResult = await this.state.storage.get<Record<string, unknown>>("lastCronResult");
+      const probe = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);
+      const lastResult = await this.state.storage.get<Record<string, unknown>>(CRON_CONFIG.lastResultStorageKey);
       const nextAlarm = await this.state.storage.getAlarm();
       return Response.json({ enabled: cronConfig.enabled, enabledDomainCount, totalDomainCount: profiles.length, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
     }
-    if (path === "/cron/cancel" && request.method === "POST") {
-      const probe = await this.state.storage.get<ProbeState>("probe");
-      if (probe?.scheduled) await this.state.storage.delete("probe");
+    if (path === CRON_CONFIG.routes.cancel && request.method === "POST") {
+      const probe = await this.state.storage.get<ProbeState>(CRON_CONFIG.probeStorageKey);
+      if (probe?.scheduled) await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
       await this.state.storage.deleteAlarm();
       return Response.json({ ok: true });
     }
     if (path === "/probe/start" && request.method === "POST") {
       const body = await request.json<{ settingsUpdatedAt: string; collected: unknown }>();
-      await this.state.storage.put("probe", {
+      await this.state.storage.put(CRON_CONFIG.probeStorageKey, {
         settingsUpdatedAt: body.settingsUpdatedAt,
         collected: body.collected,
         cursor: 0,
@@ -157,14 +157,14 @@ export class SyncLock {
       return Response.json({ ok: true });
     }
     if (path === "/probe/state") {
-      const probe = await this.state.storage.get<Record<string, unknown>>("probe");
+      const probe = await this.state.storage.get<Record<string, unknown>>(CRON_CONFIG.probeStorageKey);
       return probe ? Response.json({ available: true, ...probe }) : Response.json({ available: false });
     }
     if (path === "/probe/record" && request.method === "POST") {
       const body = await request.json<{ cursor: number; checkedCount: number; reachable: string[] }>();
       let response = Response.json({ error: "检测任务不存在" }, { status: 404 });
       await this.state.blockConcurrencyWhile(async () => {
-        const probe = await this.state.storage.get<{ cursor: number; reachable: string[]; collected: { merged: string[] } }>("probe");
+        const probe = await this.state.storage.get<{ cursor: number; reachable: string[]; collected: { merged: string[] } }>(CRON_CONFIG.probeStorageKey);
         if (!probe) return;
         if (probe.cursor !== body.cursor) {
           response = Response.json({ error: "检测批次已过期" }, { status: 409 });
@@ -172,13 +172,13 @@ export class SyncLock {
         }
         const nextCursor = probe.cursor + body.checkedCount;
         const updated = { ...probe, cursor: nextCursor, reachable: [...new Set([...probe.reachable, ...body.reachable])], updatedAt: Date.now() };
-        await this.state.storage.put("probe", updated);
+        await this.state.storage.put(CRON_CONFIG.probeStorageKey, updated);
         response = Response.json({ cursor: nextCursor, total: probe.collected.merged.length, reachable: updated.reachable });
       });
       return response;
     }
     if (path === "/probe/clear") {
-      await this.state.storage.delete("probe");
+      await this.state.storage.delete(CRON_CONFIG.probeStorageKey);
       return Response.json({ ok: true });
     }
     if (path === "/acquire") {

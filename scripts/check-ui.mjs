@@ -1,4 +1,8 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 
 const file = new URL("../src/ui/admin-page.ts", import.meta.url);
 const source = readFileSync(file, "utf8");
@@ -46,7 +50,7 @@ for (const marker of [
   "saveCronConfig(event.currentTarget.checked)",
   "id=\"cronActions\"",
   "开关切换后立即生效",
-  "按 Worker Cron 计划（每 30 分钟）",
+  "按 Worker Cron 计划（每 ${CRON_CONFIG.intervalLabel}）",
 ]) {
   if (!adminSource.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
@@ -56,14 +60,14 @@ for (const marker of ['id="output"', '#output', '查看完整执行数据', 'exe
 for (const marker of ['id="saveCron"', '保存定时任务设置', "setBusy('#saveCron'", "$('#saveCron').addEventListener"]) {
   if (adminSource.includes(marker)) throw new Error(`管理页仍包含多余的定时任务保存按钮逻辑：${marker}`);
 }
-for (const [name, moduleSource] of [["核心", coreSource], ["域名", domainSource]]) {
-  const match = moduleSource.match(/String\.raw`([\s\S]*)`(?:\.trimEnd\(\)\s*\+\s*"\\n")?;\s*$/);
-  if (!match) throw new Error(`无法找到管理页${name}脚本`);
-  new Function(match[1].replace(/\$\{adminLayoutScript\}/g, ""));
-}
-const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]).filter((script) => !script.includes("${adminCoreScript}") && !script.includes("${adminDomainScript}"));
-
+const adminBundle = join(tmpdir(), "preferred-domain-manager", "admin-page-check.cjs");
+mkdirSync(dirname(adminBundle), { recursive: true });
+execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/ui/admin-page.ts", "--bundle", "--platform=node", "--format=cjs", `--outfile=${adminBundle}`], { stdio: "ignore" });
+const { adminPage } = createRequire(import.meta.url)(adminBundle);
+const scripts = [...adminPage().matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+if (scripts.length !== 2) throw new Error(`管理页脚本数量异常：${scripts.length}`);
 scripts.forEach((script) => new Function(script));
+rmSync(adminBundle, { force: true });
 
 const layoutFile = new URL("../src/ui/admin-layout.ts", import.meta.url);
 const layoutSource = readFileSync(layoutFile, "utf8");
@@ -118,4 +122,4 @@ const mainSource = readFileSync(mainFile, "utf8");
 for (const marker of ['url.pathname === "/favicon.svg"', 'url.pathname === "/favicon.ico"', '"content-type": "image/svg+xml; charset=utf-8"']) {
   if (!mainSource.includes(marker)) throw new Error(`网站图标路由缺少标记：${marker}`);
 }
-console.log(`Embedded admin scripts syntax: ok (${scripts.length + 3})`);
+console.log(`Embedded admin scripts syntax: ok (${scripts.length + 1})`);

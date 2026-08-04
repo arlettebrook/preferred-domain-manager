@@ -1,4 +1,4 @@
-import { MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, REGION_CATALOG_CACHE_KEY, SETTINGS_KEY } from "./config";
+import { CRON_CONFIG, MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CACHE_KEY, PREFERRED_IP_CACHE_TTL_MS, REGION_CATALOG_CACHE_KEY, SETTINGS_KEY } from "./config";
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
@@ -41,11 +41,11 @@ function probeStub(env: Env) {
 }
 
 function cronStub(env: Env) {
-  return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
+  return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName(CRON_CONFIG.durableObjectName));
 }
 
 async function updateCronConfig(env: Env, enabled: boolean) {
-  const response = await cronStub(env).fetch("https://probe/cron/config", {
+  const response = await cronStub(env).fetch(`https://probe${CRON_CONFIG.routes.config}`, {
     method: "PUT",
     body: JSON.stringify({ enabled }),
   });
@@ -55,7 +55,7 @@ async function updateCronConfig(env: Env, enabled: boolean) {
 }
 
 async function getCronConfig(env: Env) {
-  const response = await cronStub(env).fetch("https://probe/cron/config");
+  const response = await cronStub(env).fetch(`https://probe${CRON_CONFIG.routes.config}`);
   const result = await response.json<{ error?: string; cronEnabled?: boolean; updatedAt?: string }>();
   if (!response.ok) throw new HttpError(response.status, result.error || "定时任务设置读取失败");
   return { enabled: result.cronEnabled !== false, updatedAt: result.updatedAt };
@@ -242,7 +242,7 @@ export async function handleApi(request: Request, env: Env) {
     return json(publicSettings({ ...settings, cronEnabled: cronConfig.enabled }), 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
-  if (url.pathname === "/api/cron/config" && request.method === "PUT") {
+  if (url.pathname === CRON_CONFIG.apiRoutes.config && request.method === "PUT") {
     const body = await readJson<{ enabled?: unknown }>(request);
     if (typeof body.enabled !== "boolean") throw new HttpError(400, "定时任务开关必须是布尔值");
     const result = await updateCronConfig(env, body.enabled);
@@ -276,7 +276,7 @@ export async function handleApi(request: Request, env: Env) {
     await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
     await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
     await probeStub(env).fetch("https://probe/probe/clear", { method: "POST" });
-    await cronStub(env).fetch("https://probe/cron/cancel", { method: "POST" });
+    await cronStub(env).fetch(`https://probe${CRON_CONFIG.routes.cancel}`, { method: "POST" });
     return json({ preferredRegions: settings.preferredRegions ?? null, updatedAt: settings.updatedAt }, 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/ips/collect" && request.method === "POST") {
@@ -324,12 +324,12 @@ export async function handleApi(request: Request, env: Env) {
     if (!state.available || !isRegionAwareCollected(state.collected) || state.settingsUpdatedAt !== settings.updatedAt) return json({ available: false }, 200, { "cache-control": "no-store" });
     return json({ available: true, checkedCount: state.cursor ?? 0, total: state.collected.merged.length, reachable: state.reachable ?? [], collected: state.collected }, 200, { "cache-control": "no-store" });
   }
-  if (url.pathname === "/api/cron/status" && request.method === "GET") {
-    const response = await cronStub(env).fetch("https://probe/cron/status");
+  if (url.pathname === CRON_CONFIG.apiRoutes.status && request.method === "GET") {
+    const response = await cronStub(env).fetch(`https://probe${CRON_CONFIG.routes.status}`);
     return json(await response.json(), response.status, { "cache-control": "no-store" });
   }
-  if (url.pathname === "/api/cron/run" && request.method === "POST") {
-    const response = await cronStub(env).fetch("https://probe/cron/start", { method: "POST" });
+  if (url.pathname === CRON_CONFIG.apiRoutes.run && request.method === "POST") {
+    const response = await cronStub(env).fetch(`https://probe${CRON_CONFIG.routes.start}`, { method: "POST" });
     const result = await response.json<{ reason?: string }>();
     if (!response.ok) throw new HttpError(response.status, result.reason === "no-candidates" ? "没有可检测的优选 IP" : result.reason === "no-enabled-domains" ? "请先为至少一个域名开启自动优选同步" : "启动定时任务失败");
     return json(result);
