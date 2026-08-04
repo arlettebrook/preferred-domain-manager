@@ -41,7 +41,7 @@ for (const marker of [
   "cronToggleDirty",
   "cronConfigSaving",
   "cronStatusSequence",
-  "定时任务设置已更改，保存后生效",
+  "if(cronToggleDirty)void saveCronConfig()",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }

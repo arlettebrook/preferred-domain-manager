@@ -224,10 +224,12 @@ export async function handleApi(request: Request, env: Env) {
     const body = await readJson<{ enabled?: unknown }>(request);
     if (typeof body.enabled !== "boolean") throw new HttpError(400, "定时任务开关必须是布尔值");
     const previous = await getSettings(env);
-    const settings: Settings = { ...previous, cronEnabled: body.enabled };
+    const settings: Settings = { ...previous, cronEnabled: body.enabled, updatedAt: new Date().toISOString() };
     await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
     if (!body.enabled) await cronStub(env).fetch("https://probe/cron/cancel", { method: "POST" });
-    return json({ cronEnabled: body.enabled });
+    const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
+    if (!persisted || persisted.cronEnabled !== body.enabled) throw new HttpError(500, "定时任务设置写入 KV 后无法确认，请检查 PDM_KV 绑定");
+    return json({ cronEnabled: persisted.cronEnabled !== false });
   }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
   if (url.pathname === "/api/ips/regions" && request.method === "GET") {
