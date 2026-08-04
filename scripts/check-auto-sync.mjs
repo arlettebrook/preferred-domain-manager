@@ -18,9 +18,9 @@ const ui = read("src/ui/admin-page.ts");
 for (const [name, source, markers] of [
   ["types", types, ["autoSyncEnabled?: boolean"]],
   ["settings", settings, ["autoSyncEnabled: item.autoSyncEnabled === true", "autoSyncEnabled: false"]],
-  ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false"]],
+  ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false", "updateCronConfig(env, body.enabled", "getCronConfig(env)", "https://probe/cron/config"]],
   ["sync", sync, ["automatic?: boolean", "profiles.filter((profile) => profile.autoSyncEnabled === true)", "同步请求必须指定域名", "automatic,"]],
-  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + 5000)"]],
+  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + 5000)", "CronConfigState", "path === \"/cron/config\"", "request.method === \"GET\"", "enabled: cronConfig.enabled"]],
   ["ui", ui, ["auto-sync-enabled", "自动同步域名：", "自动优选同步", "let dnsLoadSequence=0", "requestId!==dnsLoadSequence", "dnsState.records=[];dnsState.loading=configured", "没有域名参与自动同步"]],
 ]) {
   for (const marker of markers) {
@@ -29,10 +29,13 @@ for (const [name, source, markers] of [
 }
 
 const output = join(tmpdir(), "preferred-domain-manager", "settings-auto-sync.cjs");
+const lockOutput = join(tmpdir(), "preferred-domain-manager", "sync-lock-auto-sync.cjs");
 mkdirSync(dirname(output), { recursive: true });
 execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/services/settings.ts", "--bundle", "--platform=node", "--format=cjs", `--outfile=${output}`], { stdio: "ignore" });
+execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/durable-objects/sync-lock.ts", "--bundle", "--platform=node", "--format=cjs", "--alias:cloudflare:sockets=./scripts/cloudflare-sockets-shim.mjs", `--outfile=${lockOutput}`], { stdio: "ignore" });
 const require = createRequire(import.meta.url);
 const { domainProfiles } = require(output);
+const { SyncLock } = require(lockOutput);
 
 const profiles = domainProfiles({
   domains: [
@@ -46,6 +49,28 @@ if (profiles[1]?.autoSyncEnabled !== false) throw new Error("旧域名配置没�
 const legacyProfile = domainProfiles({ defaultDomain: "single.example", cfZoneId: "zone-3" });
 if (legacyProfile[0]?.autoSyncEnabled !== false) throw new Error("旧版单域名配置没有默认关闭自动同步");
 
+const storageValues = new Map();
+const storage = {
+  get: async (key) => storageValues.get(key),
+  put: async (key, value) => { storageValues.set(key, value); },
+  delete: async (key) => { storageValues.delete(key); },
+  deleteAlarm: async () => {},
+  getAlarm: async () => null,
+};
+const staleKvSettings = { ipSources: [], manualIps: [], domains: [], cronEnabled: true, updatedAt: "kv-stale" };
+const env = { PDM_KV: { get: async () => staleKvSettings } };
+const cronLock = new SyncLock({ storage }, env);
+const disabledWrite = await cronLock.fetch(new Request("https://probe/cron/config", { method: "PUT", body: JSON.stringify({ enabled: false, updatedAt: "do-current" }) }));
+if (!disabledWrite.ok) throw new Error("关闭定时任务未能写入 Durable Object");
+const disabledStatus = await (await cronLock.fetch(new Request("https://probe/cron/config"))).json();
+if (disabledStatus.cronEnabled !== false) throw new Error("Durable Object 未保持关闭状态");
+const disabledStart = await (await cronLock.fetch(new Request("https://probe/cron/start", { method: "POST" }))).json();
+if (disabledStart.reason !== "disabled") throw new Error("KV 返回旧开启状态时 Cron 仍被错误启动");
+await cronLock.fetch(new Request("https://probe/cron/config", { method: "PUT", body: JSON.stringify({ enabled: true, updatedAt: "do-newer" }) }));
+const enabledStatus = await (await cronLock.fetch(new Request("https://probe/cron/config"))).json();
+if (enabledStatus.cronEnabled !== true) throw new Error("Durable Object 未恢复开启状态");
+
 rmSync(output, { force: true });
+rmSync(lockOutput, { force: true });
 
 console.log("Per-domain automatic sync checks: ok");

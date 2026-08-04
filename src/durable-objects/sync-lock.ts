@@ -14,15 +14,28 @@ interface ProbeState {
   scheduled?: boolean;
 }
 
+interface CronConfigState {
+  enabled: boolean;
+  updatedAt: string;
+}
+
 export class SyncLock {
   constructor(private state: DurableObjectState, private env: Env) {}
+
+  private async cronConfig(settings?: Awaited<ReturnType<typeof getSettings>>): Promise<CronConfigState> {
+    const stored = await this.state.storage.get<CronConfigState>("cronConfig");
+    if (stored) return stored;
+    const fallback = settings ?? await getSettings(this.env);
+    return { enabled: fallback.cronEnabled !== false, updatedAt: fallback.updatedAt };
+  }
 
   async alarm() {
     const probe = await this.state.storage.get<ProbeState>("probe");
     if (!probe?.scheduled) return;
     try {
       const settings = await getSettings(this.env);
-      if (settings.cronEnabled === false) {
+      const cronConfig = await this.cronConfig(settings);
+      if (!cronConfig.enabled) {
         await this.state.storage.delete("probe");
         return;
       }
@@ -77,11 +90,30 @@ export class SyncLock {
 
   async fetch(request: Request) {
     const path = new URL(request.url).pathname;
+    if (path === "/cron/config" && request.method === "GET") {
+      const config = await this.cronConfig();
+      return Response.json({ cronEnabled: config.enabled, updatedAt: config.updatedAt });
+    }
+    if (path === "/cron/config" && request.method === "PUT") {
+      const body = await request.json<{ enabled?: unknown; updatedAt?: unknown }>();
+      if (typeof body.enabled !== "boolean") return Response.json({ error: "定时任务开关必须是布尔值" }, { status: 400 });
+      const config: CronConfigState = {
+        enabled: body.enabled,
+        updatedAt: typeof body.updatedAt === "string" && body.updatedAt ? body.updatedAt : new Date().toISOString(),
+      };
+      await this.state.storage.put("cronConfig", config);
+      if (!config.enabled) {
+        await this.state.storage.delete("probe");
+        await this.state.storage.deleteAlarm();
+      }
+      return Response.json({ ok: true, cronEnabled: config.enabled, updatedAt: config.updatedAt });
+    }
     if (path === "/cron/start" && request.method === "POST") {
       const existing = await this.state.storage.get<ProbeState>("probe");
       if (existing?.scheduled) return Response.json({ ok: true, started: false, reason: "already-running" });
       const settings = await getSettings(this.env);
-      if (settings.cronEnabled === false) return Response.json({ ok: true, started: false, reason: "disabled" });
+      const cronConfig = await this.cronConfig(settings);
+      if (!cronConfig.enabled) return Response.json({ ok: true, started: false, reason: "disabled" });
       const profiles = domainProfiles(settings);
       const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
       if (!enabledDomainCount) return Response.json({ ok: true, started: false, reason: "no-enabled-domains", enabledDomainCount, totalDomainCount: profiles.length });
@@ -97,12 +129,13 @@ export class SyncLock {
     }
     if (path === "/cron/status") {
       const settings = await getSettings(this.env);
+      const cronConfig = await this.cronConfig(settings);
       const profiles = domainProfiles(settings);
       const enabledDomainCount = profiles.filter((profile) => profile.autoSyncEnabled === true).length;
       const probe = await this.state.storage.get<ProbeState>("probe");
       const lastResult = await this.state.storage.get<Record<string, unknown>>("lastCronResult");
       const nextAlarm = await this.state.storage.getAlarm();
-      return Response.json({ enabled: settings.cronEnabled !== false, enabledDomainCount, totalDomainCount: profiles.length, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
+      return Response.json({ enabled: cronConfig.enabled, enabledDomainCount, totalDomainCount: profiles.length, running: Boolean(probe?.scheduled), checkedCount: probe?.cursor ?? 0, total: probe?.collected.merged.length ?? 0, reachableCount: probe?.reachable.length ?? 0, nextAlarm, lastResult: lastResult ?? null });
     }
     if (path === "/cron/cancel" && request.method === "POST") {
       const probe = await this.state.storage.get<ProbeState>("probe");

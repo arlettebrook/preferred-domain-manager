@@ -44,6 +44,23 @@ function cronStub(env: Env) {
   return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
 }
 
+async function updateCronConfig(env: Env, enabled: boolean, updatedAt: string) {
+  const response = await cronStub(env).fetch("https://probe/cron/config", {
+    method: "PUT",
+    body: JSON.stringify({ enabled, updatedAt }),
+  });
+  const result = await response.json<{ error?: string; cronEnabled?: boolean; updatedAt?: string }>();
+  if (!response.ok) throw new HttpError(response.status, result.error || "定时任务设置更新失败");
+  return result;
+}
+
+async function getCronConfig(env: Env) {
+  const response = await cronStub(env).fetch("https://probe/cron/config");
+  const result = await response.json<{ error?: string; cronEnabled?: boolean; updatedAt?: string }>();
+  if (!response.ok) throw new HttpError(response.status, result.error || "定时任务设置读取失败");
+  return { enabled: result.cronEnabled !== false, updatedAt: result.updatedAt };
+}
+
 function isRegionAwareCollected(value: CollectedIps | undefined): value is CollectedIps {
   return Boolean(value && Array.isArray(value.availableRegions) && Array.isArray(value.sources) && !(Array.isArray(value.preferredRegions) && value.preferredRegions.length === 0));
 }
@@ -85,6 +102,7 @@ async function saveConfig(request: Request, env: Env) {
     cronEnabled?: boolean;
   }>(request);
   const previous = await getSettings(env);
+  const currentCronConfig = input.cronEnabled === undefined ? await getCronConfig(env) : undefined;
   const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
   if (!isValidAdminPath(adminPath)) throw new HttpError(400, "管理员访问路径格式无效，仅支持类似 /admin 或 /manage 的路径，且不能使用 API/Webhook 路径");
   const homeRedirectEnabled = input.homeRedirectEnabled !== undefined ? input.homeRedirectEnabled === true : previous.homeRedirectEnabled === true;
@@ -135,14 +153,16 @@ async function saveConfig(request: Request, env: Env) {
       ? (Array.isArray(input.telegramAllowedUserIds) ? input.telegramAllowedUserIds : String(input.telegramAllowedUserIds).split(/[,\s]+/)).map(String).map((id) => id.trim()).filter((id) => /^\d+$/.test(id)).slice(0, 50)
       : previous.telegramAllowedUserIds ?? [],
     telegramWebhookSecret: typeof input.telegramWebhookSecret === "string" && input.telegramWebhookSecret ? input.telegramWebhookSecret : previous.telegramWebhookSecret,
-    cronEnabled: input.cronEnabled !== undefined ? input.cronEnabled !== false : previous.cronEnabled !== false,
+    cronEnabled: input.cronEnabled !== undefined ? input.cronEnabled !== false : currentCronConfig?.enabled !== false,
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+  if (input.cronEnabled !== undefined) await updateCronConfig(env, settings.cronEnabled !== false, settings.updatedAt);
   await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
-  return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
+  // KV 可能短暂返回旧版本；本次请求的内存对象才是刚刚校验并写入的权威配置。
+  return json(publicSettings(settings), 200, { "cache-control": "no-store" });
 }
 
 async function saveIpSources(request: Request, env: Env) {
@@ -218,7 +238,10 @@ export async function handleApi(request: Request, env: Env) {
   }
 
   if (url.pathname === "/api/auth/me") return json({ authenticated: true });
-  if (url.pathname === "/api/config" && request.method === "GET") return json(publicSettings(await getSettings(env)), 200, { "cache-control": "no-store" });
+  if (url.pathname === "/api/config" && request.method === "GET") {
+    const [settings, cronConfig] = await Promise.all([getSettings(env), getCronConfig(env)]);
+    return json(publicSettings({ ...settings, cronEnabled: cronConfig.enabled }), 200, { "cache-control": "no-store" });
+  }
   if (url.pathname === "/api/config" && request.method === "PUT") return saveConfig(request, env);
   if (url.pathname === "/api/cron/config" && request.method === "PUT") {
     const body = await readJson<{ enabled?: unknown }>(request);
@@ -226,10 +249,8 @@ export async function handleApi(request: Request, env: Env) {
     const previous = await getSettings(env);
     const settings: Settings = { ...previous, cronEnabled: body.enabled, updatedAt: new Date().toISOString() };
     await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-    if (!body.enabled) await cronStub(env).fetch("https://probe/cron/cancel", { method: "POST" });
-    const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
-    if (!persisted || persisted.cronEnabled !== body.enabled) throw new HttpError(500, "定时任务设置写入 KV 后无法确认，请检查 PDM_KV 绑定");
-    return json({ cronEnabled: persisted.cronEnabled !== false });
+    const result = await updateCronConfig(env, body.enabled, settings.updatedAt);
+    return json({ cronEnabled: result.cronEnabled !== false, updatedAt: result.updatedAt }, 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
   if (url.pathname === "/api/ips/regions" && request.method === "GET") {

@@ -38,10 +38,10 @@ for (const marker of [
   "auto-sync-enabled",
   "自动优选同步",
   "自动同步域名：",
-  "cronToggleDirty",
-  "cronConfigSaving",
-  "cronStatusSequence",
-  "if(cronToggleDirty)void saveCronConfig()",
+  "const cronUi={saving:false,statusSequence:0}",
+  "const {cronEnabled:_cronEnabled,...config}=state",
+  "saveCronConfig(event.currentTarget.checked)",
+  "$('#saveCron').addEventListener('click',()=>{void saveCronConfig();})",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
