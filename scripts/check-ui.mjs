@@ -41,13 +41,17 @@ for (const marker of [
   "const cronUi={saving:false,statusSequence:0}",
   "const {cronEnabled:_cronEnabled,...config}=state",
   "saveCronConfig(event.currentTarget.checked)",
-  "$('#saveCron').addEventListener('click',()=>{void saveCronConfig();})",
+  "id=\"cronActions\"",
+  "开关切换后立即生效",
   "按 Worker Cron 计划（每 30 分钟）",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
 for (const marker of ['id="output"', '#output', '查看完整执行数据', 'executionPanel']) {
   if (source.includes(marker)) throw new Error(`管理页仍包含已移除的完整执行数据逻辑：${marker}`);
+}
+for (const marker of ['id="saveCron"', '保存定时任务设置', "setBusy('#saveCron'", "$('#saveCron').addEventListener"]) {
+  if (source.includes(marker)) throw new Error(`管理页仍包含多余的定时任务保存按钮逻辑：${marker}`);
 }
 const scripts = [...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1].replace(/\$\{adminLayoutScript\}/g, ""));
 
