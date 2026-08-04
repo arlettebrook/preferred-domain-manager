@@ -44,10 +44,10 @@ function cronStub(env: Env) {
   return env.SYNC_LOCK.get(env.SYNC_LOCK.idFromName("preferred-ip-cron"));
 }
 
-async function updateCronConfig(env: Env, enabled: boolean, updatedAt: string) {
+async function updateCronConfig(env: Env, enabled: boolean) {
   const response = await cronStub(env).fetch("https://probe/cron/config", {
     method: "PUT",
-    body: JSON.stringify({ enabled, updatedAt }),
+    body: JSON.stringify({ enabled }),
   });
   const result = await response.json<{ error?: string; cronEnabled?: boolean; updatedAt?: string }>();
   if (!response.ok) throw new HttpError(response.status, result.error || "定时任务设置更新失败");
@@ -99,10 +99,9 @@ async function saveConfig(request: Request, env: Env) {
     telegramBotToken?: string;
     telegramAllowedUserIds?: string[] | string;
     telegramWebhookSecret?: string;
-    cronEnabled?: boolean;
   }>(request);
   const previous = await getSettings(env);
-  const currentCronConfig = input.cronEnabled === undefined ? await getCronConfig(env) : undefined;
+  const currentCronConfig = await getCronConfig(env);
   const adminPath = input.adminPath !== undefined ? normalizeAdminPath(String(input.adminPath)) : normalizeAdminPath(previous.adminPath || DEFAULT_ADMIN_PATH);
   if (!isValidAdminPath(adminPath)) throw new HttpError(400, "管理员访问路径格式无效，仅支持类似 /admin 或 /manage 的路径，且不能使用 API/Webhook 路径");
   const homeRedirectEnabled = input.homeRedirectEnabled !== undefined ? input.homeRedirectEnabled === true : previous.homeRedirectEnabled === true;
@@ -153,25 +152,25 @@ async function saveConfig(request: Request, env: Env) {
       ? (Array.isArray(input.telegramAllowedUserIds) ? input.telegramAllowedUserIds : String(input.telegramAllowedUserIds).split(/[,\s]+/)).map(String).map((id) => id.trim()).filter((id) => /^\d+$/.test(id)).slice(0, 50)
       : previous.telegramAllowedUserIds ?? [],
     telegramWebhookSecret: typeof input.telegramWebhookSecret === "string" && input.telegramWebhookSecret ? input.telegramWebhookSecret : previous.telegramWebhookSecret,
-    cronEnabled: input.cronEnabled !== undefined ? input.cronEnabled !== false : currentCronConfig?.enabled !== false,
     updatedAt: new Date().toISOString(),
   };
   await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-  if (input.cronEnabled !== undefined) await updateCronConfig(env, settings.cronEnabled !== false, settings.updatedAt);
   await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
   // KV 可能短暂返回旧版本；本次请求的内存对象才是刚刚校验并写入的权威配置。
-  return json(publicSettings(settings), 200, { "cache-control": "no-store" });
+  return json(publicSettings({ ...settings, cronEnabled: currentCronConfig.enabled }), 200, { "cache-control": "no-store" });
 }
 
 async function saveIpSources(request: Request, env: Env) {
   const input = await readJson<{ ipSources?: unknown }>(request);
   if (!Array.isArray(input.ipSources)) throw new HttpError(400, "IP 来源必须是数组");
   const previous = await getSettings(env);
+  const currentCronConfig = await getCronConfig(env);
+  const { cronEnabled: _legacyCronEnabled, ...baseSettings } = previous;
   const nextIpSources = normalizeIpSources(input.ipSources, []);
   const settings: Settings = {
-    ...previous,
+    ...baseSettings,
     ipSources: nextIpSources,
     preferredRegions: previous.preferredRegions,
     updatedAt: new Date().toISOString(),
@@ -180,7 +179,7 @@ async function saveIpSources(request: Request, env: Env) {
   await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "IP 来源写入 KV 后无法读取，请检查 PDM_KV 绑定");
-  return json(publicSettings(persisted), 200, { "cache-control": "no-store" });
+  return json(publicSettings({ ...persisted, cronEnabled: currentCronConfig.enabled }), 200, { "cache-control": "no-store" });
 }
 
 export async function handleApi(request: Request, env: Env) {
@@ -246,10 +245,7 @@ export async function handleApi(request: Request, env: Env) {
   if (url.pathname === "/api/cron/config" && request.method === "PUT") {
     const body = await readJson<{ enabled?: unknown }>(request);
     if (typeof body.enabled !== "boolean") throw new HttpError(400, "定时任务开关必须是布尔值");
-    const previous = await getSettings(env);
-    const settings: Settings = { ...previous, cronEnabled: body.enabled, updatedAt: new Date().toISOString() };
-    await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-    const result = await updateCronConfig(env, body.enabled, settings.updatedAt);
+    const result = await updateCronConfig(env, body.enabled);
     return json({ cronEnabled: result.cronEnabled !== false, updatedAt: result.updatedAt }, 200, { "cache-control": "no-store" });
   }
   if (url.pathname === "/api/ip-sources" && request.method === "PUT") return saveIpSources(request, env);
@@ -275,7 +271,8 @@ export async function handleApi(request: Request, env: Env) {
     const previous = await getSettings(env);
     const unchanged = JSON.stringify(preferredRegions ?? null) === JSON.stringify(previous.preferredRegions ?? null);
     if (unchanged) return json({ preferredRegions: previous.preferredRegions ?? null, updatedAt: previous.updatedAt, unchanged: true }, 200, { "cache-control": "no-store" });
-    const settings: Settings = { ...previous, preferredRegions, updatedAt: new Date().toISOString() };
+    const { cronEnabled: _legacyCronEnabled, ...baseSettings } = previous;
+    const settings: Settings = { ...baseSettings, preferredRegions, updatedAt: new Date().toISOString() };
     await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
     await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
     await probeStub(env).fetch("https://probe/probe/clear", { method: "POST" });

@@ -26,7 +26,9 @@ export class SyncLock {
     const stored = await this.state.storage.get<CronConfigState>("cronConfig");
     if (stored) return stored;
     const fallback = settings ?? await getSettings(this.env);
-    return { enabled: fallback.cronEnabled !== false, updatedAt: fallback.updatedAt };
+    const migrated: CronConfigState = { enabled: fallback.cronEnabled !== false, updatedAt: fallback.updatedAt };
+    await this.state.storage.put("cronConfig", migrated);
+    return migrated;
   }
 
   async alarm() {
@@ -99,7 +101,7 @@ export class SyncLock {
       if (typeof body.enabled !== "boolean") return Response.json({ error: "定时任务开关必须是布尔值" }, { status: 400 });
       const config: CronConfigState = {
         enabled: body.enabled,
-        updatedAt: typeof body.updatedAt === "string" && body.updatedAt ? body.updatedAt : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       await this.state.storage.put("cronConfig", config);
       if (!config.enabled) {

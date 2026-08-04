@@ -15,12 +15,16 @@ const sync = read("src/services/sync.ts");
 const lock = read("src/durable-objects/sync-lock.ts");
 const ui = read("src/ui/admin-page.ts");
 
+const cronConfigRoute = api.slice(api.indexOf('if (url.pathname === "/api/cron/config"'), api.indexOf('if (url.pathname === "/api/ip-sources"'));
+if (cronConfigRoute.includes("PDM_KV.put")) throw new Error("定时任务开关仍同时写入 KV 与 Durable Object");
+if (!api.includes("const { cronEnabled: _legacyCronEnabled, ...baseSettings } = previous")) throw new Error("普通配置保存仍可能保留旧 cronEnabled 字段");
+
 for (const [name, source, markers] of [
   ["types", types, ["autoSyncEnabled?: boolean"]],
   ["settings", settings, ["autoSyncEnabled: item.autoSyncEnabled === true", "autoSyncEnabled: false"]],
-  ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false", "updateCronConfig(env, body.enabled", "getCronConfig(env)", "https://probe/cron/config"]],
+  ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false", "updateCronConfig(env, body.enabled", "getCronConfig(env)", "https://probe/cron/config", "publicSettings({ ...settings, cronEnabled: currentCronConfig.enabled })"]],
   ["sync", sync, ["automatic?: boolean", "profiles.filter((profile) => profile.autoSyncEnabled === true)", "同步请求必须指定域名", "automatic,"]],
-  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + 5000)", "CronConfigState", "path === \"/cron/config\"", "request.method === \"GET\"", "enabled: cronConfig.enabled"]],
+  ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + 5000)", "CronConfigState", "path === \"/cron/config\"", "request.method === \"GET\"", "enabled: cronConfig.enabled", "await this.state.storage.put(\"cronConfig\", migrated)"]],
   ["ui", ui, ["auto-sync-enabled", "自动同步域名：", "自动优选同步", "let dnsLoadSequence=0", "requestId!==dnsLoadSequence", "dnsState.records=[];dnsState.loading=configured", "没有域名参与自动同步"]],
 ]) {
   for (const marker of markers) {
