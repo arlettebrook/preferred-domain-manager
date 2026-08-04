@@ -5,7 +5,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 ## 功能
 
 - `/` 首页、`/admin` 管理后台，管理员会话使用签名的 `HttpOnly` Cookie。
-- 单 Zone 管理，通过 `DEFAULT_DOMAIN`、`CF_ZONE_ID` 和 `CF_API_TOKEN` 管理目标域名。
+- 支持管理多个 Cloudflare Zone；每个域名分别配置域名、Zone ID 和 API Token。
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
 - DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
@@ -76,6 +76,24 @@ docs/development.md              开发结构与修改指南
 ### 5. 首次访问和网页配置
 
 打开 Cloudflare 分配的 Worker 地址并进入 `/admin`，使用 `ADMIN_PASSWORD` 登录。域名、Zone、Cloudflare API Token、优选 IP 来源、定时任务和 Telegram 等运行参数都在管理后台网页中配置，不需要预先写入环境变量。
+
+#### 域名配置所需变量
+
+进入管理后台的 **全局设置 → 域名配置**，为每个要管理的 Cloudflare 域名填写以下三项。配置会保存到 `PDM_KV`，请不要把 API Token 写入 `wrangler.toml`、`.dev.vars` 或提交到 Git 仓库。
+
+| 配置项 | 对应变量名 | 填写内容 | 如何获取 |
+| --- | --- | --- | --- |
+| 域名 | `DEFAULT_DOMAIN` | 要管理的 Zone 根域名，例如 `example.com`，不要填写 `https://`、路径或 `*.` | 登录 Cloudflare Dashboard，在 **Websites** 中选择已经接入并处于 Active 状态的域名；页面显示的域名就是这里要填写的值 |
+| Zone ID | `CF_ZONE_ID` | 上述域名对应的 32 位 Zone ID | Cloudflare Dashboard → **Websites → 选择域名 → Overview**，在右侧 **API** 区域复制 **Zone ID** |
+| API Token | `CF_API_TOKEN` | 仅用于该域名 DNS 管理的 Cloudflare API Token | Cloudflare Dashboard → 右上角头像 → **My Profile → API Tokens → Create Token**，选择 **Edit zone DNS** 模板或自定义创建 |
+
+创建 `CF_API_TOKEN` 时，建议按最小权限配置：
+
+- **Permissions**：`Zone → DNS → Edit` 和 `Zone → Zone → Read`。
+- **Zone Resources**：`Include → Specific zone → 选择要管理的域名`。
+- 创建完成后立即复制 Token；Cloudflare 只会完整显示一次。每个域名可以使用各自限定 Zone 的 Token。
+
+这里的 `DEFAULT_DOMAIN`、`CF_ZONE_ID`、`CF_API_TOKEN` 是域名配置项的变量名称，当前版本应通过管理后台填写，而不是添加到 Worker 的 **Variables and Secrets**。Worker 部署环境中只需要配置前文的 `ADMIN_PASSWORD` 和 `SESSION_SECRET`。
 
 如果要使用自己的域名，在 Worker 的 **Settings → Domains & Routes** 中添加域名或路由，并确保对应 Cloudflare Zone 已激活。需要 Telegram Webhook 时，应使用已经指向该 Worker 的 HTTPS 地址。
 
