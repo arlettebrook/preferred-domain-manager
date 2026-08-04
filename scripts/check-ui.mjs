@@ -32,6 +32,10 @@ for (const marker of [
   "手动同步只更新 ",
   "'/api/sync?domainId='+encodeURIComponent(targetId)",
   "同步优选 IP 到 '+target.domain",
+  "activeDomainStorageKey='preferred-domain-manager.active-domain-id'",
+  "localStorage.getItem(activeDomainStorageKey)",
+  "executionPanel?.remove()",
+  "preferred-action-card",
 ]) {
   if (!source.includes(marker)) throw new Error(`管理页缺少 UI 修复标记：${marker}`);
 }
