@@ -75,6 +75,10 @@ for (const marker of [
   "#settings.page.active{grid-template-columns:repeat(2,minmax(0,1fr))",
   "#settings>.page-head,#settings>.domain-profiles-card,#settings>.home-redirect-card,#settings>.telegram-settings-card{grid-column:1/-1}",
   "@media(max-width:820px){#settings.page.active{grid-template-columns:minmax(0,1fr)}",
+  ".source .remove-source{grid-column:-2/-1;justify-self:end}",
+  ".source .remove-source{grid-column:2;grid-row:auto;justify-self:end}",
+  "#settings .domain-profile-row .remove-domain{grid-column:-2/-1;justify-self:end}",
+  ".domain-profile-row .remove-domain{grid-column:1/-1!important;justify-self:end!important;width:auto!important}",
 ]) {
   if (!layoutSource.includes(marker)) throw new Error(`管理台布局缺少全局设置修复标记：${marker}`);
 }
