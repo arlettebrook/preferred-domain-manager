@@ -71,6 +71,8 @@ rmSync(adminBundle, { force: true });
 
 const layoutFile = new URL("../src/ui/admin-layout.ts", import.meta.url);
 const layoutSource = readFileSync(layoutFile, "utf8");
+if (!layoutSource.includes("if(active)select.value=active.id;")) throw new Error("仪表盘域名选择未跟随当前活动域名");
+if (layoutSource.includes("profiles.some(profile=>profile.id===current)?current:active.id")) throw new Error("仪表盘域名选择仍会保留过期的本地选项");
 for (const marker of [
   "#settings.page.active{grid-template-columns:repeat(2,minmax(0,1fr))",
   "#settings>.page-head,#settings>.domain-profiles-card,#settings>.home-redirect-card,#settings>.telegram-settings-card{grid-column:1/-1}",

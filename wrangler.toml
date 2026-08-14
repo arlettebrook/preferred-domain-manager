@@ -1,6 +1,6 @@
 name = "preferred-domain-manager"
 main = "src/main.ts"
-compatibility_date = "2026-07-30"
+compatibility_date = "2026-07-29"
 compatibility_flags = ["nodejs_compat"]
 minify = true
 keep_vars = true
