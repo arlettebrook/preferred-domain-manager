@@ -208,7 +208,7 @@ function helpText() {
     "/dns add CNAME 〈目标〉",
     "/edit [序号] 编辑记录；唯一记录时可省略序号",
     "/delete [序号] 删除记录；唯一记录时可省略序号",
-    "/update 〈IP 或域名〉 仅有一条记录时快捷更新",
+    "/update 〈IP 或域名〉 无记录时新增，唯一记录时更新",
     "点击域名或记录内容可复制，点击序号可选择编辑或删除。",
     "",
     "仅操作默认域名；仅支持 A、AAAA、CNAME；保存后会自动同步对应泛记录。CNAME 会清理两侧同名 A/AAAA。",
@@ -537,11 +537,19 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   }
   if (command === "update" && args.length === 2) {
     const records = await loadRecords(target, env, settings);
-    if (records.length !== 1) {
+    const content = args[1];
+    if (!records.length) {
+      const created = await createDnsRecord(target, {
+        type: detectDnsRecordType(content),
+        name: target.domain,
+        content,
+      }, env, settings.cfApiToken);
+      return sendText(settings, chatId, `新增成功\n\n${recordText(created)}`, resultKeyboard());
+    }
+    if (records.length > 1) {
       return sendText(settings, chatId, "当前不是唯一记录，无法使用快捷更新。请使用 /dns 后点击序号，或使用 /edit 序号。", backKeyboard());
     }
     const record = records[0];
-    const content = args[1];
     const updated = await updateDnsRecord(target, record.id, {
       type: detectDnsRecordType(content),
       name: record.name,
@@ -549,7 +557,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     }, env, settings.cfApiToken);
     return sendText(settings, chatId, `修改成功\n\n${recordText(updated)}`, resultKeyboard());
   }
-  if (command === "update") return sendText(settings, chatId, "格式：/update <IP 或域名>（仅适用于只有一条 DNS 记录时）", backKeyboard());
+  if (command === "update") return sendText(settings, chatId, "格式：/update <IP 或域名>（无记录时新增，唯一记录时更新）", backKeyboard());
   if (command === "edit" && args.length === 2) {
     const record = await selectedRecord(target, env, settings, chatId, message.from!.id, args[1]);
     return startContentEdit(settings, env, chatId, message.from!.id, record, await selectionPage(env, chatId, message.from!.id));
