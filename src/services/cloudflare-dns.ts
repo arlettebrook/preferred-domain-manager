@@ -3,7 +3,6 @@ import { HttpError } from "../errors";
 import { DnsRecord, DnsTarget, Env } from "../types";
 import { detectDnsRecordType, isIPv4, isIPv6, normalizeDomain } from "../validation";
 import { cloudflareFetch as cfFetch } from "../integrations/cloudflare/client";
-import { isTcp443Reachable } from "./ip-sources";
 
 function normalizeRecordName(value: unknown) {
   return String(value ?? "").trim().toLowerCase().replace(/\.$/, "");
@@ -15,12 +14,6 @@ function sameRecordName(left: unknown, right: unknown) {
 
 function isManagedRecord(record: DnsRecord) {
   return record.comment === MANAGED_COMMENT || record.tags?.includes(MANAGED_COMMENT);
-}
-
-async function ensureTcp443Reachable(type: string, content: string) {
-  if ((type === "A" || type === "AAAA") && !(await isTcp443Reachable(content))) {
-    throw new HttpError(422, `${content} 未通过 TCP 443 检测，不能绑定到 DNS`);
-  }
 }
 
 function validateRecordInput(zone: DnsTarget, input: Partial<DnsRecord>, detectType = false) {
@@ -127,7 +120,6 @@ export async function listDnsRecords(zone: DnsTarget, env: Env, globalApiToken?:
 
 export async function createDnsRecord(zone: DnsTarget, input: Partial<DnsRecord>, env: Env, globalApiToken?: string) {
   const validated = validateRecordInput(zone, input);
-  await ensureTcp443Reachable(validated.type, validated.content);
   const recordsBeforeChange = await listDnsRecords(zone, env, globalApiToken);
   const duplicateRoot = recordsBeforeChange.find((record) => sameRecordName(record.name, validated.name) && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
   if (duplicateRoot) throw new HttpError(409, `${validated.type} 记录已经存在：${duplicateRoot.content}`);
@@ -157,7 +149,6 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   if (!current) throw new HttpError(404, "DNS 记录不存在");
   if (!isEditableDnsRecord(zone, current)) throw new HttpError(400, "只能编辑主域名或泛域名的 A、AAAA、CNAME 记录");
   const validated = validateRecordInput(zone, input, true);
-  await ensureTcp443Reachable(validated.type, validated.content);
   const wildcard = pairedName(zone);
   const records = await listDnsRecords(zone, env, globalApiToken);
   const duplicateRoot = records.find((record) => record.id !== id && sameRecordName(record.name, validated.name) && record.type === validated.type && equivalentDnsContent(record.content, validated.content));
