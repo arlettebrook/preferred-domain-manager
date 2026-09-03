@@ -177,6 +177,62 @@ export async function updateDnsRecord(zone: DnsTarget, id: string, input: Partia
   return updatedRoot;
 }
 
+/** Reconcile the editable records for a zone with a bulk text-editor payload. */
+export async function replaceDnsRecords(zone: DnsTarget, inputs: Array<Partial<DnsRecord>>, env: Env, globalApiToken?: string) {
+  const domain = normalizeDomain(zone.domain);
+  const validated = inputs.map((input) => validateRecordInput(zone, input, true));
+  const unique = [...new Map(validated.map((record) => [
+    `${normalizeRecordName(record.name)}:${record.type}:${record.content.trim().toLowerCase()}`,
+    record,
+  ])).values()];
+  const current = (await listDnsRecords(zone, env, globalApiToken)).filter((record) => isEditableDnsRecord(zone, record));
+  const remaining = [...current];
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+
+  // Keep identical records first, then reuse an existing record at the same name
+  // for edits so a type/content change does not require a delete before a post.
+  for (const desired of unique) {
+    const exactIndex = remaining.findIndex((record) =>
+      sameRecordName(record.name, desired.name)
+      && record.type === desired.type
+      && equivalentDnsContent(record.content, desired.content));
+    if (exactIndex >= 0) {
+      remaining.splice(exactIndex, 1);
+      continue;
+    }
+    const candidateIndex = remaining.findIndex((record) => sameRecordName(record.name, desired.name));
+    if (candidateIndex >= 0) {
+      const candidate = remaining.splice(candidateIndex, 1)[0];
+      await updateDnsRecord(zone, candidate.id, desired, env, globalApiToken);
+      updated++;
+    } else {
+      await createDnsRecord(zone, desired, env, globalApiToken);
+      created++;
+    }
+  }
+  const recordsAfterUpserts = await listDnsRecords(zone, env, globalApiToken);
+  for (const record of remaining) {
+    if (!recordsAfterUpserts.some((item) => item.id === record.id)) continue;
+    await deleteDnsRecord(zone, record.id, env, globalApiToken);
+    deleted++;
+  }
+  if (shouldSyncWildcard(zone)) {
+    const wildcard = pairedName(zone);
+    const desiredWildcard = new Set(unique.map((record) => `${record.type}:${record.content.trim().toLowerCase()}`));
+    const staleWildcard = (await listDnsRecords(zone, env, globalApiToken)).filter((record) =>
+      sameRecordName(record.name, wildcard)
+      && ["A", "AAAA", "CNAME"].includes(record.type)
+      && !desiredWildcard.has(`${record.type}:${record.content.trim().toLowerCase()}`));
+    if (staleWildcard.length) {
+      await applyDnsBatch(zone, { deletes: staleWildcard.map((record) => ({ id: record.id })), patches: [], posts: [] }, env, globalApiToken);
+      deleted += staleWildcard.length;
+    }
+  }
+  return { domain, created, updated, deleted, total: unique.length };
+}
+
 export async function deleteDnsRecord(zone: DnsTarget, id: string, env: Env, globalApiToken?: string) {
   if (!/^[a-f0-9-]{8,}$/i.test(id)) throw new HttpError(400, "无效的 DNS 记录 ID");
   const current = (await listDnsRecords(zone, env, globalApiToken)).find((record) => record.id === id);

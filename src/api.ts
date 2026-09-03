@@ -3,7 +3,7 @@ import { createSession, expiredCookie, isValidSession, sessionCookie } from "./s
 import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
 import { runSync } from "./services/sync";
-import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
+import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { CollectedIps, DomainProfile, Env, IpSource, RegionCatalog, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, isValidHomeRedirectUrl, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
@@ -212,6 +212,23 @@ export async function handleApi(request: Request, env: Env) {
   }
 
   const dnsMatch = url.pathname.match(/^\/api\/dns\/records(?:\/([^/]+))?$/);
+  if (url.pathname === "/api/dns/records/bulk" && request.method === "PUT") {
+    const settings = await getSettings(env);
+    const domainId = url.searchParams.get("domainId") || undefined;
+    const target = effectiveTarget(settings, domainId);
+    if (!target) throw new HttpError(domainId ? 404 : 400, domainId ? "指定的域名不存在" : "请先在设置中保存默认域名和 Zone ID");
+    const apiToken = effectiveApiToken(settings, domainId);
+    if (!apiToken) throw new HttpError(400, `域名 ${target.domain} 尚未配置 Cloudflare API Token`);
+    const body = await readJson<{ records?: unknown }>(request);
+    if (!Array.isArray(body.records)) throw new HttpError(400, "DNS 记录必须是数组");
+    if (body.records.length > 500) throw new HttpError(400, "一次最多保存 500 条 DNS 记录");
+    const records = body.records.map((item) => {
+      if (!item || typeof item !== "object") throw new HttpError(400, "DNS 记录格式无效");
+      const value = item as Record<string, unknown>;
+      return { name: typeof value.name === "string" ? value.name : "", content: typeof value.content === "string" ? value.content : "" };
+    });
+    return json({ result: await replaceDnsRecords(target, records, env, apiToken) });
+  }
   if (dnsMatch) {
     const settings = await getSettings(env);
     const domainId = url.searchParams.get("domainId") || undefined;
