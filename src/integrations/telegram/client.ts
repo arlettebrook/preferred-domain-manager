@@ -48,6 +48,7 @@ export async function setTelegramCommands(settings: Settings) {
     commands: [
       { command: "start", description: "打开主菜单" },
       { command: "dns", description: "查看 DNS 记录" },
+      { command: "bulk", description: "批量编辑 DNS 记录" },
       { command: "add", description: "新增 DNS 记录" },
       { command: "edit", description: "编辑 DNS 记录" },
       { command: "delete", description: "删除 DNS 记录" },

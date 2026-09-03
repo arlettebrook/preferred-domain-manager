@@ -1,5 +1,5 @@
 import { HttpError } from "../errors";
-import { createDnsRecord, deleteDnsRecord, listDnsRecords, updateDnsRecord } from "./cloudflare-dns";
+import { createDnsRecord, deleteDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./cloudflare-dns";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { DnsRecord, DnsTarget, Env, Settings } from "../types";
 import { detectDnsRecordType } from "../validation";
@@ -47,13 +47,10 @@ interface TelegramReplyMarkup {
   selective?: boolean;
 }
 
-interface PendingInput {
-  kind: "add" | "edit";
-  type: RecordType;
-  name?: string;
-  recordId?: string;
-  page?: number;
-}
+type PendingInput =
+  | { kind: "add"; type: RecordType; name?: string; recordId?: string; page?: number }
+  | { kind: "edit"; type: RecordType; name?: string; recordId?: string; page?: number }
+  | { kind: "bulk"; page?: number; confirmEmpty?: boolean };
 
 interface RecordSelection {
   recordIds: string[];
@@ -175,6 +172,7 @@ function escapeHtml(value: unknown) {
 function homeKeyboard(settings?: Settings): TelegramReplyMarkup {
   const rows: TelegramButton[][] = [
     [button("📋 DNS 记录", "menu:list"), button("➕ 添加记录", "menu:add")],
+    [button("📝 批量编辑", "menu:bulk")],
     [button("🔄 刷新", "menu:list"), button("❓ 帮助", "menu:help")],
   ];
   if (settings && domainProfiles(settings).length > 1) rows.splice(1, 0, [button("◎ 选择域名", "menu:domains")]);
@@ -202,6 +200,7 @@ function helpText() {
     "",
     "/start 或 /help  打开主菜单",
     "/dns  查看 DNS 记录",
+    "/bulk  批量编辑当前域名 DNS（每行一个 IP 或目标域名）",
     "/add  新增 DNS 记录",
     "/dns add A 〈IPv4〉",
     "/dns add AAAA 〈IPv6〉",
@@ -243,6 +242,7 @@ function recordListKeyboard(records: DnsRecord[], page: number, totalPages: numb
   if (page > 0) navigation.push(button("上一页", `list:${page - 1}`));
   if (page + 1 < totalPages) navigation.push(button("下一页", `list:${page + 1}`));
   if (navigation.length) rows.push(navigation);
+  rows.push([button("📝 批量编辑", "menu:bulk")]);
   rows.push([button("➕ 添加记录", "menu:add"), button("↩️ 主菜单", "menu:home")]);
   return { inline_keyboard: rows };
 }
@@ -278,6 +278,14 @@ function resultKeyboard(page = 0): TelegramReplyMarkup {
   return { inline_keyboard: [[button("📋 查看记录", `list:${page}`), button("↩️ 主菜单", "menu:home")]] };
 }
 
+function bulkEditKeyboard(): TelegramReplyMarkup {
+  return { inline_keyboard: [[button("✖️ 取消输入", "cancel")]] };
+}
+
+function bulkEmptyConfirmKeyboard(): TelegramReplyMarkup {
+  return { inline_keyboard: [[button("✅ 确认清空", "bulk:confirm-empty"), button("取消", "cancel")]] };
+}
+
 function parseCommand(text: string) {
   const parts = text.trim().split(/\s+/).filter(Boolean);
   const command = parts.shift()?.replace(/^\//, "").split("@", 1)[0].toLowerCase();
@@ -300,6 +308,31 @@ async function findRecord(target: DnsTarget, env: Env, settings: Settings, id: s
 
 async function showHome(settings: Settings, chatId: number) {
   await sendText(settings, chatId, homeText(settings), homeKeyboard(settings));
+}
+
+async function startBulkEdit(
+  settings: Settings,
+  env: Env,
+  chatId: number,
+  userId: number,
+  callback?: TelegramCallbackQuery,
+) {
+  const target = targetFromSettings(settings);
+  const records = await loadRecords(target, env, settings);
+  const values = records.map((record) => record.content.trim()).filter(Boolean);
+  await setPending(env, chatId, userId, { kind: "bulk", page: await selectionPage(env, chatId, userId) });
+  const current = values.length ? values.join("\n") : "（当前没有可编辑记录）";
+  const text = [
+    "批量编辑 DNS",
+    `<code>${escapeHtml(target.domain)}</code> 当前有 ${values.length} 条可编辑记录。`,
+    "",
+    "请发送新的内容，每行一个 IP 或目标域名。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
+    "",
+    "当前记录：",
+    `<pre>${escapeHtml(current)}</pre>`,
+  ].join("\n");
+  if (callback) await editText(settings, callback, text, bulkEditKeyboard());
+  else await sendText(settings, chatId, text, bulkEditKeyboard());
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
@@ -400,6 +433,15 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     await clearPending(env, chatId, callback.from.id);
     return editText(settings, callback, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
   }
+  if (data === "menu:bulk") return startBulkEdit(settings, env, chatId, callback.from.id, callback);
+  if (data === "bulk:confirm-empty") {
+    const pending = await getPending(env, chatId, callback.from.id);
+    if (!pending || pending.kind !== "bulk" || !pending.confirmEmpty) throw new HttpError(400, "批量编辑状态已失效，请重新打开批量编辑");
+    const target = targetFromSettings(settings);
+    const result = await replaceDnsRecords(target, [], env, settings.cfApiToken);
+    await clearPending(env, chatId, callback.from.id);
+    return editText(settings, callback, `批量清空完成\n\n删除：${result.deleted} 条\n当前共：${result.total} 条`, resultKeyboard(pending.page ?? 0));
+  }
   if (data === "cancel") {
     const pending = await getPending(env, chatId, callback.from.id);
     await clearPending(env, chatId, callback.from.id);
@@ -474,8 +516,25 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
 async function handlePendingMessage(settings: Settings, env: Env, message: TelegramMessage, pending: PendingInput) {
   const chatId = message.chat!.id;
   const content = message.text!.trim();
-  if (!content) throw new HttpError(400, "记录内容不能为空");
   const target = targetFromSettings(settings);
+  if (pending.kind === "bulk") {
+    const lines = content.split(/\r?\n/);
+    const values = lines.map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    if (!values.length) {
+      await setPending(env, chatId, message.from!.id, { kind: "bulk", page: pending.page, confirmEmpty: true });
+      return sendText(settings, chatId, "批量内容为空，将删除当前域名全部可编辑 DNS 记录。确定继续吗？", bulkEmptyConfirmKeyboard());
+    }
+    const records = values.map((value) => ({ name: target.domain, content: value }));
+    const result = await replaceDnsRecords(target, records, env, settings.cfApiToken);
+    await clearPending(env, chatId, message.from!.id);
+    return sendText(
+      settings,
+      chatId,
+      `批量保存完成\n\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`,
+      resultKeyboard(pending.page ?? 0),
+    );
+  }
+  if (!content) throw new HttpError(400, "记录内容不能为空");
   if (pending.kind === "add") {
     const record = await createDnsRecord(target, { type: pending.type, name: pending.name, content }, env, settings.cfApiToken);
     await clearPending(env, chatId, message.from!.id);
@@ -503,6 +562,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     return showHome(settings, chatId);
   }
   if (command === "list" || command === "ls" || command === "refresh") return showList(settings, env, chatId, message.from!.id, 0);
+  if (command === "bulk" || command === "batch") return startBulkEdit(settings, env, chatId, message.from!.id);
   if (command === "add" && args.length === 1) return sendText(settings, chatId, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
   if (command === "add" && args.length > 1 && args.length < 3) return sendText(settings, chatId, "格式：/add A 〈IPv4〉，或直接点击新增菜单。", backKeyboard());
   if (command === "edit" && args.length > 2) return sendText(settings, chatId, "格式：/edit 〈序号〉，请先发送 /dns 获取最新序号。", backKeyboard());
