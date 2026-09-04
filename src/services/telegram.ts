@@ -39,7 +39,7 @@ interface TelegramUpdate {
 
 interface TelegramButton {
   text: string;
-  callback_data: string;
+  callback_data?: string;
 }
 
 interface TelegramReplyMarkup {
@@ -300,7 +300,7 @@ function manualIpsText(settings: Settings) {
   ].join("\n");
 }
 
-function manualIpsKeyboard(): TelegramReplyMarkup {
+function manualIpsKeyboard(settings: Settings): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button("编辑配置", "manual:edit"), button("一键同步到 DNS", "manual:sync")],
     [button("清空配置", "manual:clear")],
@@ -342,7 +342,7 @@ async function showHome(settings: Settings, chatId: number) {
 
 async function showManualIps(settings: Settings, chatId: number, callback?: TelegramCallbackQuery) {
   const text = manualIpsText(settings);
-  const markup = manualIpsKeyboard();
+  const markup = manualIpsKeyboard(settings);
   if (callback) await editText(settings, callback, text, markup);
   else await sendText(settings, chatId, text, markup);
 }
@@ -507,7 +507,9 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   if (data === "menu:manual") return showManualIps(settings, chatId, callback);
   if (data === "manual:edit") {
     await setPending(env, chatId, callback.from.id, { kind: "manual-ips" });
-    return editText(settings, callback, "编辑手动优选 IP 配置\n\n请发送新的 IPv4 或 IPv6 列表，可每行一个，也可用空格或逗号分隔。无效地址会被忽略，重复地址会自动去重。", cancelKeyboard());
+    const currentIps = dedupeIps(settings.manualIps ?? []);
+    const current = currentIps.length ? `<pre>${escapeHtml(currentIps.join("\n"))}</pre>` : "（尚未配置手动优选 IP）";
+    return editText(settings, callback, `编辑手动优选 IP 配置\n\n当前配置：\n${current}\n\n请发送新的 IPv4 或 IPv6 列表，可每行一个，也可用空格或逗号分隔。无效地址会被忽略，重复地址会自动去重。`, cancelKeyboard());
   }
   if (data === "manual:sync") return syncBulkFromManual(settings, env, callback, chatId);
   if (data === "manual:clear") {
@@ -614,7 +616,7 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
     if (!manualIps.length) throw new HttpError(400, "未检测到有效的 IPv4 或 IPv6 地址，请重新发送");
     await saveManualIps(env, manualIps);
     await clearPending(env, chatId, message.from!.id);
-    return sendText(settings, chatId, `手动优选 IP 配置已保存\n\n当前配置：${manualIps.length} 个\n\n<pre>${escapeHtml(manualIps.join("\n"))}</pre>`, manualIpsKeyboard());
+    return sendText(settings, chatId, `手动优选 IP 配置已保存\n\n当前配置：${manualIps.length} 个\n\n<pre>${escapeHtml(manualIps.join("\n"))}</pre>`, manualIpsKeyboard({ ...settings, manualIps }));
   }
   const target = targetFromSettings(settings);
   if (pending.kind === "bulk") {
