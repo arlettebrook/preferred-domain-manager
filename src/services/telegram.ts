@@ -1,8 +1,9 @@
 import { HttpError } from "../errors";
+import { PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "../config";
 import { createDnsRecord, deleteDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./cloudflare-dns";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { DnsRecord, DnsTarget, Env, Settings } from "../types";
-import { detectDnsRecordType } from "../validation";
+import { dedupeIps, detectDnsRecordType } from "../validation";
 import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramApi, telegramBotInfo } from "../integrations/telegram/client";
 
 const MAX_MESSAGE_LENGTH = 3900;
@@ -280,7 +281,10 @@ function resultKeyboard(page = 0): TelegramReplyMarkup {
 }
 
 function bulkEditKeyboard(): TelegramReplyMarkup {
-  return { inline_keyboard: [[button("✖️ 取消输入", "cancel")]] };
+  return { inline_keyboard: [
+    [button("一键同步", "bulk:sync"), button("反向同步", "bulk:reverse")],
+    [button("✖️ 取消输入", "cancel")],
+  ] };
 }
 
 function bulkEmptyConfirmKeyboard(): TelegramReplyMarkup {
@@ -337,6 +341,36 @@ async function startBulkEdit(
   const markup = bulkEditKeyboard();
   if (callback) await editText(settings, callback, text, markup);
   else await sendText(settings, chatId, text, markup);
+}
+
+async function saveManualIps(env: Env, ips: string[]) {
+  const current = await getSettings(env);
+  const manualIps = dedupeIps(ips);
+  const updated = { ...current, manualIps, updatedAt: new Date().toISOString() };
+  await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(updated));
+  await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
+  return manualIps;
+}
+
+async function syncBulkFromManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
+  const target = targetFromSettings(settings);
+  const manualIps = dedupeIps(settings.manualIps ?? []);
+  if (!manualIps.length) throw new HttpError(400, "尚未配置手动优选 IP");
+  const result = await replaceDnsRecords(target, manualIps.map((content) => ({ name: target.domain, content })), env, settings.cfApiToken);
+  const pending = await getPending(env, chatId, callback.from.id);
+  await clearPending(env, chatId, callback.from.id);
+  return editText(settings, callback, `一键同步完成\n\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, resultKeyboard(pending?.page ?? 0));
+}
+
+async function syncBulkToManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
+  const target = targetFromSettings(settings);
+  const records = await loadRecords(target, env, settings);
+  const manualIps = dedupeIps(records.filter((record) => record.type === "A" || record.type === "AAAA").map((record) => record.content));
+  if (!manualIps.length) throw new HttpError(400, "当前 DNS 记录中没有可同步的 IPv4 或 IPv6");
+  await saveManualIps(env, manualIps);
+  const pending = await getPending(env, chatId, callback.from.id);
+  await clearPending(env, chatId, callback.from.id);
+  return editText(settings, callback, `反向同步完成\n\n已保存：${manualIps.length} 个手动优选 IP`, resultKeyboard(pending?.page ?? 0));
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
@@ -443,6 +477,8 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     return editText(settings, callback, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
   }
   if (data === "menu:bulk") return startBulkEdit(settings, env, chatId, callback.from.id, callback);
+  if (data === "bulk:sync") return syncBulkFromManual(settings, env, callback, chatId);
+  if (data === "bulk:reverse") return syncBulkToManual(settings, env, callback, chatId);
   if (data === "bulk:confirm-empty") {
     const pending = await getPending(env, chatId, callback.from.id);
     if (!pending || pending.kind !== "bulk" || !pending.confirmEmpty) throw new HttpError(400, "批量编辑状态已失效，请重新打开批量编辑");
