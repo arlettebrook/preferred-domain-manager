@@ -427,8 +427,13 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     await saveDomainSelection(env, chatId, callback.from.id, domainId);
     await clearPending(env, chatId, callback.from.id);
     await env.PDM_KV.delete(selectionKey(chatId, callback.from.id));
-    const scopedSettings = { ...settings, defaultDomain: target.domain, cfZoneId: target.zoneId };
-    return editText(scopedSettings, callback, homeText(scopedSettings), homeKeyboard(scopedSettings));
+    const scopedSettings = {
+      ...settings,
+      defaultDomain: target.domain,
+      cfZoneId: target.zoneId,
+      cfApiToken: effectiveApiToken(settings, domainId),
+    };
+    return showList(scopedSettings, env, chatId, callback.from.id, 0, callback);
   }
   if (data === "menu:help") return editText(settings, callback, helpText(), backKeyboard());
   if (data === "menu:list") return showList(settings, env, chatId, callback.from.id, 0, callback);
