@@ -51,7 +51,8 @@ interface TelegramReplyMarkup {
 type PendingInput =
   | { kind: "add"; type: RecordType; name?: string; recordId?: string; page?: number }
   | { kind: "edit"; type: RecordType; name?: string; recordId?: string; page?: number }
-  | { kind: "bulk"; page?: number; confirmEmpty?: boolean };
+  | { kind: "bulk"; page?: number; confirmEmpty?: boolean }
+  | { kind: "manual-ips"; page?: number };
 
 interface RecordSelection {
   recordIds: string[];
@@ -174,6 +175,7 @@ function homeKeyboard(settings?: Settings): TelegramReplyMarkup {
   const rows: TelegramButton[][] = [
     [button("📋 DNS 记录", "menu:list"), button("➕ 添加记录", "menu:add")],
     [button("📝 批量编辑", "menu:bulk")],
+    [button("⚙️ 手动优选 IP", "menu:manual")],
     [button("🔄 刷新", "menu:list"), button("❓ 帮助", "menu:help")],
   ];
   if (settings && domainProfiles(settings).length > 1) rows.splice(1, 0, [button("◎ 选择域名", "menu:domains")]);
@@ -202,6 +204,7 @@ function helpText() {
     "/start 或 /help  打开主菜单",
     "/dns  查看 DNS 记录",
     "/bulk  批量编辑当前域名 DNS（每行一个 IP 或目标域名）",
+    "/manual  查看和编辑手动优选 IP 配置",
     "/add  新增 DNS 记录",
     "/dns add A 〈IPv4〉",
     "/dns add AAAA 〈IPv6〉",
@@ -287,6 +290,28 @@ function bulkEditKeyboard(): TelegramReplyMarkup {
   ] };
 }
 
+function manualIpsText(settings: Settings) {
+  const ips = dedupeIps(settings.manualIps ?? []);
+  return [
+    "手动优选 IP 配置",
+    `当前配置：${ips.length} 个`,
+    "",
+    ips.length ? `<pre>${escapeHtml(ips.join("\n"))}</pre>` : "（尚未配置手动优选 IP）",
+  ].join("\n");
+}
+
+function manualIpsKeyboard(): TelegramReplyMarkup {
+  return { inline_keyboard: [
+    [button("编辑配置", "manual:edit"), button("一键同步到 DNS", "manual:sync")],
+    [button("清空配置", "manual:clear")],
+    [button("↩️ 返回主菜单", "menu:home")],
+  ] };
+}
+
+function manualIpsClearKeyboard(): TelegramReplyMarkup {
+  return { inline_keyboard: [[button("✅ 确认清空", "manual:clear-confirm"), button("取消", "menu:manual")]] };
+}
+
 function bulkEmptyConfirmKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [[button("✅ 确认清空", "bulk:confirm-empty"), button("取消", "cancel")]] };
 }
@@ -313,6 +338,13 @@ async function findRecord(target: DnsTarget, env: Env, settings: Settings, id: s
 
 async function showHome(settings: Settings, chatId: number) {
   await sendText(settings, chatId, homeText(settings), homeKeyboard(settings));
+}
+
+async function showManualIps(settings: Settings, chatId: number, callback?: TelegramCallbackQuery) {
+  const text = manualIpsText(settings);
+  const markup = manualIpsKeyboard();
+  if (callback) await editText(settings, callback, text, markup);
+  else await sendText(settings, chatId, text, markup);
 }
 
 async function startBulkEdit(
@@ -472,6 +504,21 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   if (data === "menu:help") return editText(settings, callback, helpText(), backKeyboard());
   if (data === "menu:list") return showList(settings, env, chatId, callback.from.id, 0, callback);
   if (data.startsWith("list:")) return showList(settings, env, chatId, callback.from.id, Number(data.slice(5)) || 0, callback);
+  if (data === "menu:manual") return showManualIps(settings, chatId, callback);
+  if (data === "manual:edit") {
+    await setPending(env, chatId, callback.from.id, { kind: "manual-ips" });
+    return editText(settings, callback, "编辑手动优选 IP 配置\n\n请发送新的 IPv4 或 IPv6 列表，可每行一个，也可用空格或逗号分隔。无效地址会被忽略，重复地址会自动去重。", cancelKeyboard());
+  }
+  if (data === "manual:sync") return syncBulkFromManual(settings, env, callback, chatId);
+  if (data === "manual:clear") {
+    const count = dedupeIps(settings.manualIps ?? []).length;
+    if (!count) return showManualIps(settings, chatId, callback);
+    return editText(settings, callback, `确定清空当前 ${count} 个手动优选 IP 吗？\n\n清空配置不会自动修改现有 DNS 记录。`, manualIpsClearKeyboard());
+  }
+  if (data === "manual:clear-confirm") {
+    await saveManualIps(env, []);
+    return showManualIps({ ...settings, manualIps: [] }, chatId, callback);
+  }
   if (data === "menu:add") {
     await clearPending(env, chatId, callback.from.id);
     return editText(settings, callback, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
@@ -490,6 +537,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   if (data === "cancel") {
     const pending = await getPending(env, chatId, callback.from.id);
     await clearPending(env, chatId, callback.from.id);
+    if (pending?.kind === "manual-ips") return showManualIps(settings, chatId, callback);
     if (pending?.page != null) return showList(settings, env, chatId, callback.from.id, pending.page, callback);
     return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
@@ -561,6 +609,13 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
 async function handlePendingMessage(settings: Settings, env: Env, message: TelegramMessage, pending: PendingInput) {
   const chatId = message.chat!.id;
   const content = message.text!.trim();
+  if (pending.kind === "manual-ips") {
+    const manualIps = dedupeIps(content.split(/[\s,]+/));
+    if (!manualIps.length) throw new HttpError(400, "未检测到有效的 IPv4 或 IPv6 地址，请重新发送");
+    await saveManualIps(env, manualIps);
+    await clearPending(env, chatId, message.from!.id);
+    return sendText(settings, chatId, `手动优选 IP 配置已保存\n\n当前配置：${manualIps.length} 个\n\n<pre>${escapeHtml(manualIps.join("\n"))}</pre>`, manualIpsKeyboard());
+  }
   const target = targetFromSettings(settings);
   if (pending.kind === "bulk") {
     const lines = content.split(/\r?\n/);
@@ -608,6 +663,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   }
   if (command === "list" || command === "ls" || command === "refresh") return showList(settings, env, chatId, message.from!.id, 0);
   if (command === "bulk" || command === "batch") return startBulkEdit(settings, env, chatId, message.from!.id);
+  if (command === "manual" || command === "ips") return showManualIps(settings, chatId);
   if (command === "add" && args.length === 1) return sendText(settings, chatId, "新增 DNS 记录\n\n请选择记录类型：", typeKeyboard());
   if (command === "add" && args.length > 1 && args.length < 3) return sendText(settings, chatId, "格式：/add A 〈IPv4〉，或直接点击新增菜单。", backKeyboard());
   if (command === "edit" && args.length > 2) return sendText(settings, chatId, "格式：/edit 〈序号〉，请先发送 /dns 获取最新序号。", backKeyboard());
