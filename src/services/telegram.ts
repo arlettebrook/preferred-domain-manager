@@ -586,6 +586,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const pending = await getPending(env, chatId, callback.from.id);
     await clearPending(env, chatId, callback.from.id);
     if (pending?.kind === "manual-ips") return showManualIps(settings, chatId, callback);
+    if (pending?.kind === "bulk") return editText(settings, callback, homeText(settings), homeKeyboard(settings));
     if (pending?.page != null) return showList(settings, env, chatId, callback.from.id, pending.page, callback);
     return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
@@ -707,6 +708,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     const pending = await getPending(env, chatId, message.from!.id);
     await clearPending(env, chatId, message.from!.id);
     if (pending?.kind === "manual-ips") return showManualIps(settings, chatId);
+    if (pending?.kind === "bulk") return showHome(settings, chatId);
     if (pending?.page != null) return showList(settings, env, chatId, message.from!.id, pending.page);
     return showHome(settings, chatId);
   }
