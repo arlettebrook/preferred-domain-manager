@@ -47,15 +47,21 @@ export async function setTelegramCommands(settings: Settings) {
   await telegramApi(settings, "setMyCommands", {
     commands: [
       { command: "start", description: "打开主菜单" },
-      { command: "dns", description: "查看 DNS 记录" },
+      { command: "ips", description: "直接编辑手动优选 IP" },
+      { command: "update", description: "更新唯一 DNS 记录" },
       { command: "bulk", description: "批量编辑 DNS 记录" },
+      { command: "dns", description: "查看 DNS 记录" },
       { command: "manual", description: "查看和编辑手动优选 IP" },
       { command: "add", description: "新增 DNS 记录" },
       { command: "edit", description: "编辑 DNS 记录" },
       { command: "delete", description: "删除 DNS 记录" },
-      { command: "update", description: "更新唯一 DNS 记录" },
       { command: "help", description: "查看帮助" },
       { command: "cancel", description: "取消当前操作" },
+      { command: "menu", description: "打开主菜单（别名）" },
+      { command: "batch", description: "批量编辑 DNS 记录（别名）" },
+      { command: "list", description: "查看 DNS 记录（别名）" },
+      { command: "ls", description: "查看 DNS 记录（别名）" },
+      { command: "refresh", description: "刷新 DNS 记录" },
     ],
   });
   return true;
