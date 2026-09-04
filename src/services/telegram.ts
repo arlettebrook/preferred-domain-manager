@@ -284,6 +284,15 @@ function resultKeyboard(page = 0): TelegramReplyMarkup {
   return { inline_keyboard: [[button("📋 查看记录", `list:${page}`), button("↩️ 主菜单", "menu:home")]] };
 }
 
+function bulkResultKeyboard(page = 0): TelegramReplyMarkup {
+  return {
+    inline_keyboard: [
+      [button("📝 返回批量编辑", "menu:bulk")],
+      [button("📋 查看记录", `list:${page}`), button("↩️ 主菜单", "menu:home")],
+    ],
+  };
+}
+
 function bulkEditKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button("一键同步", "bulk:sync"), button("反向同步", "bulk:reverse")],
@@ -402,7 +411,7 @@ async function syncBulkFromManual(settings: Settings, env: Env, callback: Telegr
   const result = await replaceDnsRecords(target, manualIps.map((content) => ({ name: target.domain, content })), env, settings.cfApiToken);
   const pending = await getPending(env, chatId, callback.from.id);
   await clearPending(env, chatId, callback.from.id);
-  return editText(settings, callback, `一键同步完成\n\n目标域名：<code>${escapeHtml(target.domain)}</code>\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, resultKeyboard(pending?.page ?? 0));
+  return editText(settings, callback, `一键同步完成\n\n目标域名：<code>${escapeHtml(target.domain)}</code>\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, bulkResultKeyboard(pending?.page ?? 0));
 }
 
 async function syncBulkToManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
@@ -413,7 +422,7 @@ async function syncBulkToManual(settings: Settings, env: Env, callback: Telegram
   await saveManualIps(env, manualIps);
   const pending = await getPending(env, chatId, callback.from.id);
   await clearPending(env, chatId, callback.from.id);
-  return editText(settings, callback, `反向同步完成\n\n来源域名：<code>${escapeHtml(target.domain)}</code>\n已保存：${manualIps.length} 个手动优选 IP`, resultKeyboard(pending?.page ?? 0));
+  return editText(settings, callback, `反向同步完成\n\n来源域名：<code>${escapeHtml(target.domain)}</code>\n已保存：${manualIps.length} 个手动优选 IP`, bulkResultKeyboard(pending?.page ?? 0));
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
