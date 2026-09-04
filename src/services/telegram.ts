@@ -294,6 +294,7 @@ function manualIpsText(settings: Settings) {
   const ips = dedupeIps(settings.manualIps ?? []);
   return [
     "手动优选 IP 配置",
+    `当前域名：<code>${escapeHtml(settings.defaultDomain || "未配置")}</code>`,
     `当前配置：${ips.length} 个`,
     "",
     ips.length ? `<pre>${escapeHtml(ips.join("\n"))}</pre>` : "（尚未配置手动优选 IP）",
@@ -391,7 +392,7 @@ async function syncBulkFromManual(settings: Settings, env: Env, callback: Telegr
   const result = await replaceDnsRecords(target, manualIps.map((content) => ({ name: target.domain, content })), env, settings.cfApiToken);
   const pending = await getPending(env, chatId, callback.from.id);
   await clearPending(env, chatId, callback.from.id);
-  return editText(settings, callback, `一键同步完成\n\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, resultKeyboard(pending?.page ?? 0));
+  return editText(settings, callback, `一键同步完成\n\n目标域名：<code>${escapeHtml(target.domain)}</code>\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, resultKeyboard(pending?.page ?? 0));
 }
 
 async function syncBulkToManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
@@ -402,7 +403,7 @@ async function syncBulkToManual(settings: Settings, env: Env, callback: Telegram
   await saveManualIps(env, manualIps);
   const pending = await getPending(env, chatId, callback.from.id);
   await clearPending(env, chatId, callback.from.id);
-  return editText(settings, callback, `反向同步完成\n\n已保存：${manualIps.length} 个手动优选 IP`, resultKeyboard(pending?.page ?? 0));
+  return editText(settings, callback, `反向同步完成\n\n来源域名：<code>${escapeHtml(target.domain)}</code>\n已保存：${manualIps.length} 个手动优选 IP`, resultKeyboard(pending?.page ?? 0));
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
@@ -509,7 +510,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     await setPending(env, chatId, callback.from.id, { kind: "manual-ips" });
     const currentIps = dedupeIps(settings.manualIps ?? []);
     const current = currentIps.length ? `<pre>${escapeHtml(currentIps.join("\n"))}</pre>` : "（尚未配置手动优选 IP）";
-    return editText(settings, callback, `编辑手动优选 IP 配置\n\n当前配置：\n${current}\n\n请发送新的 IPv4 或 IPv6 列表，可每行一个，也可用空格或逗号分隔。无效地址会被忽略，重复地址会自动去重。`, cancelKeyboard());
+    return editText(settings, callback, `编辑手动优选 IP 配置\n\n当前域名：<code>${escapeHtml(settings.defaultDomain || "未配置")}</code>\n\n当前配置：\n${current}\n\n请发送新的 IPv4 或 IPv6 列表，可每行一个，也可用空格或逗号分隔。无效地址会被忽略，重复地址会自动去重。`, cancelKeyboard());
   }
   if (data === "manual:sync") return syncBulkFromManual(settings, env, callback, chatId);
   if (data === "manual:clear") {
