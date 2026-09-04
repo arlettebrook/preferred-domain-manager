@@ -321,18 +321,21 @@ async function startBulkEdit(
   const records = await loadRecords(target, env, settings);
   const values = records.map((record) => record.content.trim()).filter(Boolean);
   await setPending(env, chatId, userId, { kind: "bulk", page: await selectionPage(env, chatId, userId) });
-  const current = values.length ? values.join("\n") : "（当前没有可编辑记录）";
+  const current = values.length
+    ? values.map((value) => `<pre>${escapeHtml(value)}</pre>`).join("\n")
+    : "（当前没有可编辑记录）";
   const text = [
     "批量编辑 DNS",
     `<code>${escapeHtml(target.domain)}</code> 当前有 ${values.length} 条可编辑记录。`,
     "",
     "请发送新的内容，每行一个 IP 或目标域名。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
     "",
-    "当前记录：",
-    `<pre>${escapeHtml(current)}</pre>`,
+    "当前记录（点击代码块可复制）：",
+    current,
   ].join("\n");
-  if (callback) await editText(settings, callback, text, bulkEditKeyboard());
-  else await sendText(settings, chatId, text, bulkEditKeyboard());
+  const markup = bulkEditKeyboard();
+  if (callback) await editText(settings, callback, text, markup);
+  else await sendText(settings, chatId, text, markup);
 }
 
 async function showList(settings: Settings, env: Env, chatId: number, userId: number, page: number, callback?: TelegramCallbackQuery) {
