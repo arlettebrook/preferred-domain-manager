@@ -233,7 +233,7 @@ function recordListText(records: DnsRecord[], page: number, totalPages: number, 
   ].join("\n");
 }
 
-function recordListKeyboard(records: DnsRecord[], page: number, totalPages: number): TelegramReplyMarkup {
+function recordListKeyboard(records: DnsRecord[], page: number, totalPages: number, settings?: Settings): TelegramReplyMarkup {
   const rows: TelegramButton[][] = [];
   records.forEach((record, index) => {
     rows.push([button(String(index + 1), `record:${record.id}`)]);
@@ -243,6 +243,7 @@ function recordListKeyboard(records: DnsRecord[], page: number, totalPages: numb
   if (page + 1 < totalPages) navigation.push(button("下一页", `list:${page + 1}`));
   if (navigation.length) rows.push(navigation);
   rows.push([button("📝 批量编辑", "menu:bulk")]);
+  if (settings && domainProfiles(settings).length > 1) rows.push([button("◎ 选择域名", "menu:domains")]);
   rows.push([button("➕ 添加记录", "menu:add"), button("↩️ 主菜单", "menu:home")]);
   return { inline_keyboard: rows };
 }
@@ -330,7 +331,7 @@ async function startBulkEdit(
     "",
     "请发送新的内容，每行一个 IP 或目标域名。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
     "",
-    "当前记录（点击代码块右上角 Copy code 可复制）：",
+    "当前记录：",
     current,
   ].join("\n");
   const markup = bulkEditKeyboard();
@@ -346,7 +347,7 @@ async function showList(settings: Settings, env: Env, chatId: number, userId: nu
   const records = allRecords.slice(safePage * RECORDS_PER_PAGE, (safePage + 1) * RECORDS_PER_PAGE);
   await saveSelection(env, chatId, userId, { recordIds: records.map((record) => record.id), page: safePage });
   const text = recordListText(records, safePage, totalPages, allRecords.length, target.domain);
-  const markup = recordListKeyboard(records, safePage, totalPages);
+  const markup = recordListKeyboard(records, safePage, totalPages, settings);
   if (callback) await editText(settings, callback, text, markup);
   else await sendText(settings, chatId, text, markup);
 }
