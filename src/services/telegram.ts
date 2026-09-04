@@ -186,6 +186,10 @@ function domainKeyboard(settings: Settings): TelegramReplyMarkup {
   return { inline_keyboard: domainProfiles(settings).map((profile) => [button(`${profile.domain === settings.defaultDomain ? "✓ " : ""}${profile.domain}`, `domain:${profile.id}`)]).concat([[button("返回主菜单", "menu:home")]]) };
 }
 
+function manualDomainKeyboard(settings: Settings): TelegramReplyMarkup {
+  return { inline_keyboard: domainProfiles(settings).map((profile) => [button(`${profile.domain === settings.defaultDomain ? "✓ " : ""}${profile.domain}`, `manual-domain:${profile.id}`)]).concat([[button("返回手动优选 IP", "menu:manual")]]) };
+}
+
 function backKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [[button("↩️ 返回主菜单", "menu:home")]] };
 }
@@ -293,6 +297,15 @@ function bulkResultKeyboard(page = 0): TelegramReplyMarkup {
   };
 }
 
+function manualResultKeyboard(): TelegramReplyMarkup {
+  return {
+    inline_keyboard: [
+      [button("⚙️ 返回手动优选 IP", "menu:manual")],
+      [button("📋 查看记录", "menu:list"), button("↩️ 主菜单", "menu:home")],
+    ],
+  };
+}
+
 function bulkEditKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button("一键同步", "bulk:sync"), button("反向同步", "bulk:reverse")],
@@ -312,11 +325,13 @@ function manualIpsText(settings: Settings) {
 }
 
 function manualIpsKeyboard(settings: Settings): TelegramReplyMarkup {
-  return { inline_keyboard: [
+  const rows: TelegramButton[][] = [
     [button("编辑配置", "manual:edit"), button("一键同步到 DNS", "manual:sync")],
     [button("清空配置", "manual:clear")],
     [button("↩️ 返回主菜单", "menu:home")],
-  ] };
+  ];
+  if (domainProfiles(settings).length > 1) rows.splice(2, 0, [button("◎ 选择域名", "menu:manual-domains")]);
+  return { inline_keyboard: rows };
 }
 
 function manualIpsClearKeyboard(): TelegramReplyMarkup {
@@ -404,14 +419,14 @@ async function saveManualIps(env: Env, ips: string[]) {
   return manualIps;
 }
 
-async function syncBulkFromManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
+async function syncBulkFromManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number, returnToManual = false) {
   const target = targetFromSettings(settings);
   const manualIps = dedupeIps(settings.manualIps ?? []);
   if (!manualIps.length) throw new HttpError(400, "尚未配置手动优选 IP");
   const result = await replaceDnsRecords(target, manualIps.map((content) => ({ name: target.domain, content })), env, settings.cfApiToken);
   const pending = await getPending(env, chatId, callback.from.id);
   await clearPending(env, chatId, callback.from.id);
-  return editText(settings, callback, `一键同步完成\n\n目标域名：<code>${escapeHtml(target.domain)}</code>\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, bulkResultKeyboard(pending?.page ?? 0));
+  return editText(settings, callback, `一键同步完成\n\n目标域名：<code>${escapeHtml(target.domain)}</code>\n新增：${result.created} 条\n更新：${result.updated} 条\n删除：${result.deleted} 条\n当前共：${result.total} 条`, returnToManual ? manualResultKeyboard() : bulkResultKeyboard(pending?.page ?? 0));
 }
 
 async function syncBulkToManual(settings: Settings, env: Env, callback: TelegramCallbackQuery, chatId: number) {
@@ -506,6 +521,22 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     return editText(settings, callback, homeText(settings), homeKeyboard(settings));
   }
   if (data === "menu:domains") return editText(settings, callback, "请选择要编辑的域名", domainKeyboard(settings));
+  if (data === "menu:manual-domains") return editText(settings, callback, "请选择手动优选 IP 要同步到的域名", manualDomainKeyboard(settings));
+  if (data.startsWith("manual-domain:")) {
+    const domainId = data.slice(14);
+    const target = effectiveTarget(settings, domainId);
+    if (!target) throw new HttpError(404, "指定的域名不存在");
+    await saveDomainSelection(env, chatId, callback.from.id, domainId);
+    await clearPending(env, chatId, callback.from.id);
+    await env.PDM_KV.delete(selectionKey(chatId, callback.from.id));
+    const scopedSettings = {
+      ...settings,
+      defaultDomain: target.domain,
+      cfZoneId: target.zoneId,
+      cfApiToken: effectiveApiToken(settings, domainId),
+    };
+    return showManualIps(scopedSettings, chatId, callback);
+  }
   if (data.startsWith("domain:")) {
     const domainId = data.slice(7);
     const target = effectiveTarget(settings, domainId);
@@ -526,7 +557,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
   if (data.startsWith("list:")) return showList(settings, env, chatId, callback.from.id, Number(data.slice(5)) || 0, callback);
   if (data === "menu:manual") return showManualIps(settings, chatId, callback);
   if (data === "manual:edit") return startManualIpsEdit(settings, env, chatId, callback.from.id, callback);
-  if (data === "manual:sync") return syncBulkFromManual(settings, env, callback, chatId);
+  if (data === "manual:sync") return syncBulkFromManual(settings, env, callback, chatId, true);
   if (data === "manual:clear") {
     const count = dedupeIps(settings.manualIps ?? []).length;
     if (!count) return showManualIps(settings, chatId, callback);
