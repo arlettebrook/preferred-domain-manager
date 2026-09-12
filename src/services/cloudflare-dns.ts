@@ -269,20 +269,21 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
   if (!domain || !zone.zoneId) throw new HttpError(400, "缺少默认域名或 Zone ID");
   const names = shouldSyncWildcard(zone) ? new Set([domain, `*.${domain}`]) : new Set([domain]);
   const allRecords = await listDnsRecordsByNames(zone, names, env, globalApiToken);
-  const cnameNames = new Set(allRecords.filter((record) => names.has(normalizeRecordName(record.name)) && record.type === "CNAME").map((record) => normalizeRecordName(record.name)));
-  const hasPairedCname = cnameNames.size > 0;
-  if (hasPairedCname) return { domain, created: 0, deleted: 0, kept: 0, unproxied: 0, total: 0, skippedCname: true };
   const namesToSync = new Set(names);
   // Compare every existing A/AAAA record, not only records previously marked
   // as managed. This prevents POSTing a duplicate when a user created the
-  // same IP manually. Only managed records may be deleted.
+  // same IP manually. Only managed A/AAAA records may be deleted as stale;
+  // CNAMEs above are removed because they conflict with the desired records.
   const existing = allRecords.filter((record) => names.has(normalizeRecordName(record.name)) && (record.type === "A" || record.type === "AAAA"));
   const desired = new Map<string, Set<string>>();
   for (const name of namesToSync) desired.set(name, new Set(ips.map((ip) => `${isIPv4(ip) ? "A" : "AAAA"}:${ip}`)));
-  const deletes: Array<{ id: string }> = [];
+  // A/AAAA records cannot coexist with CNAME at the same name. Replace any
+  // existing CNAMEs before posting the preferred IP records.
+  const cnameRecords = allRecords.filter((record) => names.has(normalizeRecordName(record.name)) && record.type === "CNAME");
+  const deletes: Array<{ id: string }> = cnameRecords.map((record) => ({ id: record.id }));
   const patches: Array<Record<string, unknown>> = [];
   const posts: Array<Record<string, unknown>> = [];
-  let created = 0, deleted = 0, kept = 0, updated = 0, unproxied = 0;
+  let created = 0, deleted = cnameRecords.length, kept = 0, updated = 0, unproxied = 0;
   const seen = new Set<string>();
 
   for (const record of existing) {
@@ -325,5 +326,5 @@ export async function syncZone(zone: DnsTarget, ips: string[], env: Env, globalA
     }
   }
   await applyDnsBatch(zone, { deletes, patches, posts }, env, globalApiToken);
-  return { domain, created, deleted, kept, updated, unproxied, total: ips.length * namesToSync.size, skippedCname: hasPairedCname };
+  return { domain, created, deleted, kept, updated, unproxied, total: ips.length * namesToSync.size, replacedCname: cnameRecords.length };
 }

@@ -14,6 +14,7 @@ const settings = read("src/services/settings.ts");
 const api = read("src/api.ts");
 const main = read("src/main.ts");
 const sync = read("src/services/sync.ts");
+const dns = read("src/services/cloudflare-dns.ts");
 const lock = read("src/durable-objects/sync-lock.ts");
 const ui = read("src/ui/admin-page.ts") + read("src/ui/admin-core-script.ts") + read("src/ui/admin-domain-script.ts");
 const wrangler = read("wrangler.toml");
@@ -29,6 +30,7 @@ for (const [name, source, markers] of [
   ["api", api, ["autoSyncEnabled: item.autoSyncEnabled !== undefined", "autoSyncEnabled: false", "updateCronConfig(env, body.enabled", "getCronConfig(env)", "CRON_CONFIG.routes.config", "CRON_CONFIG.apiRoutes.config", "publicSettings({ ...settings, cronEnabled: currentCronConfig.enabled })"]],
   ["main", main, ["CRON_CONFIG.durableObjectName", "CRON_CONFIG.routes.start"]],
   ["sync", sync, ["automatic?: boolean", "profiles.filter((profile) => profile.autoSyncEnabled === true)", "同步请求必须指定域名", "automatic,"]],
+  ["dns", dns, ["const cnameRecords = allRecords.filter", "const deletes: Array<{ id: string }> = cnameRecords.map", "replacedCname"]],
   ["cron", lock, ["runSync(this.env, { automatic: true })", "reason: \"no-enabled-domains\"", "profile.autoSyncEnabled === true", "error instanceof LockBusyError", "setAlarm(Date.now() + CRON_CONFIG.busyRetryDelayMs)", "CronConfigState", "path === CRON_CONFIG.routes.config", "request.method === \"GET\"", "enabled: cronConfig.enabled", "blockConcurrencyWhile", "initializedFrom: hasLegacyValue ? \"legacy-kv\" : \"default\""]],
   ["ui", ui, ["auto-sync-enabled", "自动同步域名：", "自动优选同步", "let dnsLoadSequence=0", "requestId!==dnsLoadSequence", "dnsState.records=[];dnsState.loading=configured", "没有域名参与自动同步"]],
 ]) {
@@ -38,14 +40,17 @@ for (const [name, source, markers] of [
 }
 
 const output = join(tmpdir(), "preferred-domain-manager", "settings-auto-sync.cjs");
+const dnsOutput = join(tmpdir(), "preferred-domain-manager", "cloudflare-dns-auto-sync.cjs");
 const lockOutput = join(tmpdir(), "preferred-domain-manager", "sync-lock-auto-sync.cjs");
 const configOutput = join(tmpdir(), "preferred-domain-manager", "cron-config-check.cjs");
 mkdirSync(dirname(output), { recursive: true });
 execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/services/settings.ts", "--bundle", "--platform=node", "--format=cjs", `--outfile=${output}`], { stdio: "ignore" });
+execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/services/cloudflare-dns.ts", "--bundle", "--platform=node", "--format=cjs", `--outfile=${dnsOutput}`], { stdio: "ignore" });
 execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/durable-objects/sync-lock.ts", "--bundle", "--platform=node", "--format=cjs", "--alias:cloudflare:sockets=./scripts/cloudflare-sockets-shim.mjs", `--outfile=${lockOutput}`], { stdio: "ignore" });
 execFileSync(process.execPath, [join("node_modules", "esbuild", "bin", "esbuild"), "src/config.ts", "--bundle", "--platform=node", "--format=cjs", `--outfile=${configOutput}`], { stdio: "ignore" });
 const require = createRequire(import.meta.url);
 const { defaultSettings, domainProfiles } = require(output);
+const { syncZone } = require(dnsOutput);
 const { SyncLock } = require(lockOutput);
 const { CRON_CONFIG } = require(configOutput);
 
@@ -66,6 +71,27 @@ if (profiles[1]?.autoSyncEnabled !== false) throw new Error("旧域名配置没�
 
 const legacyProfile = domainProfiles({ defaultDomain: "single.example", cfZoneId: "zone-3" });
 if (legacyProfile[0]?.autoSyncEnabled !== false) throw new Error("旧版单域名配置没有默认关闭自动同步");
+
+const originalFetch = globalThis.fetch;
+const dnsRequests = [];
+globalThis.fetch = async (url, init = {}) => {
+  const method = init.method || "GET";
+  dnsRequests.push({ method, body: init.body ? JSON.parse(init.body) : undefined });
+  if (method === "GET") {
+    return Response.json({ success: true, result: [{ id: "cname-1", name: "example.com", type: "CNAME", content: "origin.example.com", proxied: false }] });
+  }
+  return Response.json({ success: true, result: [] });
+};
+try {
+  const dnsResult = await syncZone({ zoneId: "zone-1", domain: "example.com", syncWildcard: false }, ["1.1.1.1"], {}, "token");
+  if (dnsResult.replacedCname !== 1 || dnsResult.created !== 1 || dnsResult.deleted !== 1) throw new Error("CNAME 未被替换为优选 IP 记录");
+  const deleteBatch = dnsRequests.find((request) => request.method === "POST" && request.body?.deletes?.length);
+  const postBatch = dnsRequests.find((request) => request.method === "POST" && request.body?.posts?.length);
+  if (!deleteBatch?.body.deletes.some((record) => record.id === "cname-1")) throw new Error("同步未先删除冲突的 CNAME");
+  if (!postBatch?.body.posts.some((record) => record.type === "A" && record.content === "1.1.1.1")) throw new Error("同步未创建优选 A 记录");
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 const cronUrl = (route) => `https://probe${route}`;
 function createState(initial = []) {
@@ -134,6 +160,7 @@ const enabledStatus = await (await cronLock.fetch(new Request(cronUrl(CRON_CONFI
 if (enabledStatus.cronEnabled !== true) throw new Error("Durable Object 未恢复开启状态");
 
 rmSync(output, { force: true });
+rmSync(dnsOutput, { force: true });
 rmSync(lockOutput, { force: true });
 rmSync(configOutput, { force: true });
 

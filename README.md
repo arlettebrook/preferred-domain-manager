@@ -8,7 +8,7 @@ Cloudflare Workers DNS 管理器：从多个 IP 接口抓取优选 IP，合并�
 - 支持管理多个 Cloudflare Zone；每个域名分别配置域名、Zone ID、API Token 和自动优选同步开关。
 - 多来源 IP 合并、去重、IPv4/IPv6 过滤，支持手动 IP。
 - 所有候选 IP 先做 TCP 443 检测；没有通过项时不会改动现有 DNS。
-- DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录。
+- DNS Diff Update，只创建新增记录、删除过期记录、保留未变化记录；同步目标存在 CNAME 时会先删除冲突的 CNAME，再写入优选 A/AAAA 记录。
 - DNS 编辑会展示当前 Zone 的全部记录；仅允许操作主域名的 `A`、`AAAA`、`CNAME`，其他记录以只读方式展示。编辑保存时会按内容自动识别类型：IPv4 为 A、IPv6 为 AAAA、其他目标为 CNAME。
 - DNS TTL 固定为标准账户兼容的最低值 `60` 秒，前端显示“最低（60 秒）”，接口也不允许修改。Enterprise 账户可能支持更低值，但本项目默认不使用 30 秒以下的 TTL。
 - 每个域名可独立设置“同步泛域名”开关：开启时主域名变更会自动配对 `*.域名`，关闭时两者独立管理；手动/定时优选 IP 同步和 Telegram 仍会处理根域名与泛域名。记录固定为 `proxied: false`，避免开启小黄云导致优选 IP 失效。
