@@ -111,7 +111,7 @@ try {
   // bulk editing so an unchanged bulk save cannot delete a hidden subdomain.
   const scripts = [...adminPage().matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
   const core = scripts[0], domain = scripts[1];
-  const fields = new Map(["#dnsName", "#dnsContent", "#dnsType", "#saveDns", "#dnsForm", "#dnsStatus"].map((key) => [key, { value: "", blur() {}, addEventListener(_name, callback) { this.submit = callback; } }]));
+  const fields = new Map(["#dnsName", "#dnsSubdomain", "#dnsSubdomainEditor", "#dnsNameSuffix", "#dnsNamePreview", "#dnsUseRoot", "#dnsContent", "#dnsType", "#saveDns", "#dnsForm", "#dnsStatus"].map((key) => [key, { value: "", blur() {}, focus() {}, addEventListener(name, callback) { this[name] = callback; } }]));
   const label = {};
   const payloads = [];
   const errors = [];
@@ -121,28 +121,63 @@ try {
     dnsState: { records: [], editingId: null },
     $: (selector) => fields.get(selector),
     document: { querySelector: () => label },
+    setTimeout: (callback) => callback(),
     openDns() {}, updateDnsHint() {}, closeDns() {}, loadDns: async () => {},
     normalizeDnsContent: (value) => value.trim().toLowerCase(),
     api: async (path, input) => payloads.push({ path, ...JSON.parse(input.body) }),
     setStatus() {}, notify: (message, kind) => { if (kind === "error") errors.push(message); },
   };
-  runInNewContext(domain.slice(0, domain.indexOf("const domainSyncStyle")) + "\n" + domain.match(/^const originalOpenDns=.*$/m)[0] + "\n" + domain.match(/^\$\('#dnsForm'\).*$/m)[0] + "\n" + core.match(/^function parseBulkDnsText.*$/m)[0] + "\n" + core.match(/^function bulkDnsRecordText.*$/m)[0] + "\n" + core.match(/^function detectDnsType.*$/m)[0] + "\n" + core.match(/^function isDnsIpv4.*$/m)[0] + "\n" + core.match(/^function isDnsIpv6.*$/m)[0], context);
+  runInNewContext(domain.slice(0, domain.indexOf("const dnsNameEditorStyle")) + "\n" + domain.match(/^const originalOpenDns=.*$/m)[0] + "\n" + domain.match(/^\$\('#dnsForm'\).*$/m)[0] + "\n" + domain.match(/^\$\('#dnsSubdomain'\).*$/gm).join("\n") + "\n" + domain.match(/^\$\('#dnsUseRoot'\).*$/m)[0] + "\n" + core.match(/^function parseBulkDnsText.*$/m)[0] + "\n" + core.match(/^function bulkDnsRecordText.*$/m)[0] + "\n" + core.match(/^function detectDnsType.*$/m)[0] + "\n" + core.match(/^function isDnsIpv4.*$/m)[0] + "\n" + core.match(/^function isDnsIpv6.*$/m)[0], context);
   context.openDns();
-  assert.equal(fields.get("#dnsName").readOnly, false);
+  assert.equal(fields.get("#dnsName").hidden, true);
+  assert.equal(fields.get("#dnsName").required, false);
+  assert.equal(fields.get("#dnsSubdomain").disabled, false);
+  assert.equal(fields.get("#dnsSubdomain").value, "");
+  assert.equal(fields.get("#dnsSubdomainEditor").hidden, false);
+  assert.equal(fields.get("#dnsNameSuffix").textContent, "example.com");
   assert(label.textContent.includes("子域名"));
-  fields.get("#dnsName").value = "aaa.example.com";
+  fields.get("#dnsSubdomain").value = "aaa";
+  fields.get("#dnsSubdomain").input();
+  assert.equal(fields.get("#dnsNameSuffix").textContent, ".example.com");
+  assert.equal(fields.get("#dnsNamePreview").textContent, "完整记录名称：aaa.example.com");
   fields.get("#dnsContent").value = "origin.example.net";
   await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
   assert.equal(payloads.at(-1).name, "aaa.example.com");
   assert.equal(payloads.at(-1).type, "CNAME");
   assert.equal(errors.length, 0);
+  context.openDns({ name: "api.v2.example.com" });
+  assert.equal(fields.get("#dnsSubdomain").value, "api.v2");
+  await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(payloads.at(-1).name, "api.v2.example.com");
+  fields.get("#dnsSubdomain").value = "WWW.example.com.";
+  fields.get("#dnsSubdomain").input();
+  assert.equal(fields.get("#dnsSubdomain").value, "www");
+  await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(payloads.at(-1).name, "www.example.com");
+  fields.get("#dnsUseRoot").click();
+  assert.equal(fields.get("#dnsSubdomain").value, "");
+  await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(payloads.at(-1).name, "example.com");
+  fields.get("#dnsSubdomain").value = "*";
+  await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
+  assert.equal(payloads.length, 4);
+  assert.equal(errors.length, 1);
+  context.state.defaultDomain = "other.example.net";
+  context.openDns();
+  assert.equal(fields.get("#dnsNameSuffix").textContent, "other.example.net");
+  assert.equal(fields.get("#dnsSubdomain").value, "");
+  context.state.defaultDomain = zone.domain;
   profile.syncWildcard = true;
   context.openDns();
   assert.equal(fields.get("#dnsName").readOnly, true);
+  assert.equal(fields.get("#dnsName").hidden, false);
+  assert.equal(fields.get("#dnsName").required, true);
+  assert.equal(fields.get("#dnsSubdomain").disabled, true);
+  assert.equal(fields.get("#dnsSubdomainEditor").hidden, true);
   fields.get("#dnsName").value = "aaa.example.com";
   await fields.get("#dnsForm").submit({ preventDefault() {}, stopImmediatePropagation() {} });
-  assert.equal(payloads.length, 1);
-  assert.equal(errors.length, 1);
+  assert.equal(payloads.length, 4);
+  assert.equal(errors.length, 2);
   profile.syncWildcard = false;
   records = [record("example.com", "A", "1.1.1.1", { editable: true }), record("aaa.example.com", "CNAME", "origin.example.net", { editable: true })];
   const bulkText = records.map(context.bulkDnsRecordText).join("\n");
