@@ -2,6 +2,15 @@ export function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, "");
 }
 
+/** Shared with the browser form; keep this function self-contained. */
+export function isAllowedDnsRecordName(domainValue: string, nameValue: string, syncWildcard = true) {
+  const domain = String(domainValue || "").trim().toLowerCase().replace(/\.$/, "");
+  const name = String(nameValue || "").trim().toLowerCase().replace(/\.$/, "");
+  if (!domain || !name || name.length > 253) return false;
+  if (!name.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) return false;
+  return name === domain || (!syncWildcard && name.endsWith(`.${domain}`));
+}
+
 export const DEFAULT_ADMIN_PATH = "/admin";
 
 export function normalizeHomeRedirectUrl(value: string) {

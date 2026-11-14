@@ -1,9 +1,9 @@
 import { HttpError } from "../errors";
 import { PREFERRED_IP_CACHE_KEY, SETTINGS_KEY } from "../config";
-import { createDnsRecord, deleteDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./cloudflare-dns";
+import { createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./cloudflare-dns";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings } from "./settings";
 import { DnsRecord, DnsTarget, Env, Settings } from "../types";
-import { dedupeIps, detectDnsRecordType } from "../validation";
+import { dedupeIps, detectDnsRecordType, isAllowedDnsRecordName } from "../validation";
 import { deleteTelegramWebhook, setTelegramCommands, setTelegramWebhook, telegramApi, telegramBotInfo } from "../integrations/telegram/client";
 
 const MAX_MESSAGE_LENGTH = 3900;
@@ -219,13 +219,12 @@ function helpText() {
     "/update 〈IP 或域名〉 无记录时新增，唯一记录时更新",
     "点击域名或记录内容可复制，点击序号可选择编辑或删除。",
     "",
-    "仅操作默认域名；仅支持 A、AAAA、CNAME；保存后会自动同步对应泛记录。CNAME 会清理两侧同名 A/AAAA。",
+    "仅操作当前域名；仅支持 A、AAAA、CNAME。开启泛域名同步时自动配对泛记录；关闭后可编辑主域名和子域名。",
   ].join("\n");
 }
 
 function filteredRecords(records: DnsRecord[], target: DnsTarget) {
-  const names = target.syncWildcard === false ? [target.domain, `*.${target.domain}`] : [target.domain];
-  return records.filter((record) => names.includes(record.name) && ["A", "AAAA", "CNAME"].includes(record.type));
+  return records.filter((record) => isEditableDnsRecord(target, record));
 }
 
 function recordText(record: DnsRecord) {
@@ -391,7 +390,7 @@ async function startBulkEdit(
 ) {
   const target = targetFromSettings(settings);
   const records = await loadRecords(target, env, settings);
-  const values = records.map((record) => record.content.trim()).filter(Boolean);
+  const values = records.map((record) => record.name === target.domain ? record.content.trim() : `${record.type} ${record.name} ${record.content.trim()}`).filter(Boolean);
   await setPending(env, chatId, userId, { kind: "bulk", page: await selectionPage(env, chatId, userId) });
   const current = values.length
     ? `<pre>${escapeHtml(values.join("\n"))}</pre>`
@@ -400,7 +399,7 @@ async function startBulkEdit(
     "批量编辑 DNS",
     `<code>${escapeHtml(target.domain)}</code> 当前有 ${values.length} 条可编辑记录。`,
     "",
-    "请发送新的内容，每行一个 IP 或目标域名。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
+    "请发送新的内容，每行一个 IP 或目标域名；关闭泛域名同步后，子域名使用“名称 内容”格式。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
     "",
     "当前记录：",
     current,
@@ -673,7 +672,14 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
       await setPending(env, chatId, message.from!.id, { kind: "bulk", page: pending.page, confirmEmpty: true });
       return sendText(settings, chatId, "批量内容为空，将删除当前域名全部可编辑 DNS 记录。确定继续吗？", bulkEmptyConfirmKeyboard());
     }
-    const records = values.map((value) => ({ name: target.domain, content: value }));
+    const records = values.map((value) => {
+      const columns = value.split(/\s+/);
+      if (columns.length === 1) return { name: target.domain, content: value };
+      if (columns.length >= 3) {
+        if (!recordType(columns.shift() || "")) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
+      }
+      return { name: columns.shift()!, content: columns.join(" ") };
+    });
     const result = await replaceDnsRecords(target, records, env, settings.cfApiToken);
     await clearPending(env, chatId, message.from!.id);
     return sendText(
@@ -735,9 +741,8 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     const type = recordType(args[1]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
     const suppliedName = args.length >= 4 ? args[2].toLowerCase() : "";
-    const wildcard = `*.${target.domain}`;
-    const hasExplicitName = suppliedName === target.domain || (target.syncWildcard === false && suppliedName === wildcard);
-    if (args.length >= 4 && !hasExplicitName) throw new HttpError(400, `记录名称只能是 ${target.domain}${target.syncWildcard === false ? ` 或 ${wildcard}` : ""}`);
+    const hasExplicitName = isAllowedDnsRecordName(target.domain, suppliedName, target.syncWildcard !== false);
+    if (args.length >= 4 && !hasExplicitName) throw new HttpError(400, target.syncWildcard === false ? `记录名称必须是 ${target.domain} 或其有效子域名，不能使用泛域名` : `记录名称只能是 ${target.domain}`);
     const name = hasExplicitName ? suppliedName : target.domain;
     const record = await createDnsRecord(target, { type, name, content: args.slice(hasExplicitName ? 3 : 2).join(" ") }, env, settings.cfApiToken);
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());

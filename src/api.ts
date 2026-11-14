@@ -2,8 +2,8 @@ import { CRON_CONFIG, MAX_IP_SOURCE_COUNT, MAX_TCP_CHECK_ITEMS, PREFERRED_IP_CAC
 import { createSession, expiredCookie, isValidSession, sessionCookie } from "./security/session";
 import { checkTcp443Batch, collectPreferredIps, getPreferredIpSnapshot, savePreferredIpSnapshot } from "./services/ip-sources";
 import { domainProfiles, effectiveApiToken, effectiveTarget, getSettings, publicSettings } from "./services/settings";
-import { runSync } from "./services/sync";
-import { clearDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
+import { runSync, withSyncLock } from "./services/sync";
+import { clearDnsRecords, clearWildcardDnsRecords, createDnsRecord, deleteDnsRecord, isEditableDnsRecord, listDnsRecords, replaceDnsRecords, updateDnsRecord } from "./services/cloudflare-dns";
 import { CollectedIps, DomainProfile, Env, IpSource, RegionCatalog, Settings } from "./types";
 import { DEFAULT_ADMIN_PATH, dedupeIps, isValidAdminPath, isValidHomeRedirectUrl, normalizeAdminPath, normalizeDomain } from "./validation";
 import { LockBusyError, HttpError } from "./errors";
@@ -154,8 +154,27 @@ async function saveConfig(request: Request, env: Env) {
     telegramWebhookSecret: typeof input.telegramWebhookSecret === "string" && input.telegramWebhookSecret ? input.telegramWebhookSecret : previous.telegramWebhookSecret,
     updatedAt: new Date().toISOString(),
   };
-  await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
-  await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
+  const persist = async () => {
+    await env.PDM_KV.put(SETTINGS_KEY, JSON.stringify(settings));
+    await env.PDM_KV.delete(PREFERRED_IP_CACHE_KEY);
+  };
+  const disabledWildcardProfiles = input.domains !== undefined ? domains.filter((profile) => profile.syncWildcard === false) : [];
+  if (disabledWildcardProfiles.length) {
+    // Serialize with preferred-IP synchronization so an in-flight sync cannot
+    // recreate wildcard records while the new configuration is being saved.
+    await withSyncLock(env, async () => {
+      for (const profile of disabledWildcardProfiles) {
+        try {
+          await clearWildcardDnsRecords(profile, env, profile.apiToken);
+        } catch (error) {
+          throw new HttpError(error instanceof HttpError ? error.status : 502, `${profile.domain} 泛域名记录清理失败，配置未保存：${error instanceof Error ? error.message : "未知错误"}`);
+        }
+      }
+      await persist();
+    });
+  } else {
+    await persist();
+  }
   const persisted = await env.PDM_KV.get<Settings>(SETTINGS_KEY, "json");
   if (!persisted) throw new HttpError(500, "配置写入 KV 后无法读取，请检查 PDM_KV 绑定");
   // KV 可能短暂返回旧版本；本次请求的内存对象才是刚刚校验并写入的权威配置。
