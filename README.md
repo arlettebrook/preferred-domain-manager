@@ -108,6 +108,10 @@ docs/development.md              开发结构与修改指南
 
 Telegram Bot 不是部署必需项。部署完成后，在 `/admin` 的“全局设置 → Telegram Bot”页面填写 Bot Token、Webhook Secret 和允许操作的用户 ID，然后使用页面中的测试与 Webhook 设置按钮完成配置。Webhook 必须通过已经指向该 Worker 的 HTTPS 域名访问。
 
+关闭当前域名的“同步泛域名”后，Bot 新增记录会先询问子域名前缀：发送 `www` 自动组成 `www.当前域名`，发送 `@` 或点击“使用主域名”操作主域名，也支持多级前缀和完整域名。记录菜单中的“编辑子域名”会展示新名称，确认后保留记录内容。开启泛域名同步时隐藏该操作，仍自动配对主域名与泛记录。
+
+文本命令支持 `/add A www 1.1.1.1`、`/add CNAME @ target.example.net`；批量编辑支持 `www 1.1.1.1`、`api.v2 target.example.net` 等“前缀 内容”格式。仅输入内容时仍表示主域名。发送 `/help` 查看当前域名对应的用法。
+
 ### 6. 配置自定义域名（可选）
 
 Worker 发布后，可在 Cloudflare Dashboard → Workers & Pages → 对应 Worker → Settings → Domains & Routes 中添加：

@@ -49,8 +49,9 @@ interface TelegramReplyMarkup {
 }
 
 type PendingInput =
-  | { kind: "add"; type: RecordType; name?: string; recordId?: string; page?: number }
+  | { kind: "add"; type: RecordType; name?: string; recordId?: string; page?: number; targetDomain?: string; zoneId?: string }
   | { kind: "edit"; type: RecordType; name?: string; recordId?: string; page?: number }
+  | { kind: "dns-name"; operation: "add" | "edit"; type: RecordType; name?: string; ready?: boolean; recordId?: string; page?: number; targetDomain: string; zoneId: string }
   | { kind: "bulk"; page?: number; confirmEmpty?: boolean }
   | { kind: "manual-ips"; page?: number };
 
@@ -194,14 +195,30 @@ function backKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [[button("↩️ 返回主菜单", "menu:home")]] };
 }
 
+function dnsModeText(target: DnsTarget) {
+  return target.syncWildcard === false ? "泛域名同步已关闭 · 可编辑子域名" : "泛域名同步已开启 · 主域名自动配对泛记录";
+}
+
+function resolveDnsName(target: DnsTarget, value: string) {
+  const domain = target.domain.trim().toLowerCase().replace(/\.$/, "");
+  const input = value.trim().toLowerCase().replace(/\.$/, "");
+  const name = !input || input === "@" || input === domain ? domain
+    : input.endsWith(`.${domain}`) ? input : `${input}.${domain}`;
+  if (!isAllowedDnsRecordName(domain, name, target.syncWildcard !== false)) {
+    throw new HttpError(400, target.syncWildcard === false ? "请输入有效的子域名前缀，例如 www；不支持泛域名。发送 @ 表示主域名。" : `泛域名同步已开启，记录名称只能是 ${domain}`);
+  }
+  return name;
+}
+
 function homeText(settings: Settings) {
   const target = settings.defaultDomain && settings.cfZoneId
     ? `当前域名：<code>${escapeHtml(settings.defaultDomain)}</code>`
     : "当前尚未完成默认域名和 Zone ID 配置";
-  return [`优选域名管理 Bot`, target].join("\n");
+  return [`优选域名管理 Bot`, target, ...(effectiveTarget(settings) ? [dnsModeText(targetFromSettings(settings))] : [])].join("\n");
 }
 
-function helpText() {
+function helpText(settings: Settings) {
+  const target = effectiveTarget(settings);
   return [
     "优选域名管理 Bot",
     "",
@@ -219,7 +236,14 @@ function helpText() {
     "/update 〈IP 或域名〉 无记录时新增，唯一记录时更新",
     "点击域名或记录内容可复制，点击序号可选择编辑或删除。",
     "",
-    "仅操作当前域名；仅支持 A、AAAA、CNAME。开启泛域名同步时自动配对泛记录；关闭后可编辑主域名和子域名。",
+    "仅操作当前域名；仅支持 A、AAAA、CNAME。",
+    ...(target ? [dnsModeText(target), ...(target.syncWildcard === false ? [
+      "新增时只需发送子域名前缀，例如 www；发送 @ 或点击“使用主域名”操作主域名。",
+      "记录菜单中的“编辑子域名”可修改名称，确认后保留原内容。",
+      `/add A www 1.1.1.1 → www.${target.domain}`,
+      "/add CNAME @ target.example.net → 主域名",
+      "批量编辑支持“前缀 内容”，例如 www 1.1.1.1；也支持当前域名下的完整名称。",
+    ] : ["新建和修改主域名记录时会自动配对泛记录。"])] : []),
   ].join("\n");
 }
 
@@ -264,10 +288,11 @@ function typeKeyboard(): TelegramReplyMarkup {
   ] };
 }
 
-function editTypeKeyboard(recordId: string, currentType: RecordType): TelegramReplyMarkup {
+function editTypeKeyboard(recordId: string, currentType: RecordType, target: DnsTarget): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button(`${currentType === "A" ? "✅" : ""} A · IPv4`, `edit:type:${recordId}:A`), button(`${currentType === "AAAA" ? "✅" : ""} AAAA · IPv6`, `edit:type:${recordId}:AAAA`)],
     [button(`${currentType === "CNAME" ? "✅" : ""} CNAME · 别名`, `edit:type:${recordId}:CNAME`)],
+    ...(target.syncWildcard === false ? [[button("编辑子域名", `edit-name:${recordId}`)]] : []),
     [button("↩️ 返回内容编辑", `edit:${recordId}`)],
   ] };
 }
@@ -276,11 +301,72 @@ function cancelKeyboard(): TelegramReplyMarkup {
   return { inline_keyboard: [[button("✖️ 取消输入", "cancel")]] };
 }
 
-function editPromptKeyboard(recordId: string): TelegramReplyMarkup {
+function editPromptKeyboard(recordId: string, target: DnsTarget): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button("完整编辑", `edit-options:${recordId}`)],
+    ...(target.syncWildcard === false ? [[button("编辑子域名", `edit-name:${recordId}`)]] : []),
     [button("取消并返回列表", "cancel")],
   ] };
+}
+
+function dnsNameKeyboard(confirm = false): TelegramReplyMarkup {
+  return { inline_keyboard: [
+    ...(confirm ? [[button("确认修改名称", "dns-name:save")]] : []),
+    [button("使用主域名", "dns-name:root")],
+    [button("✖️ 取消输入", "cancel")],
+  ] };
+}
+
+function addContentKeyboard(target: DnsTarget): TelegramReplyMarkup {
+  return target.syncWildcard === false ? { inline_keyboard: [
+    [button("修改子域名前缀", "dns-name:change")],
+    [button("✖️ 取消输入", "cancel")],
+  ] } : cancelKeyboard();
+}
+
+function assertNameInputTarget(target: DnsTarget, pending: Extract<PendingInput, { kind: "dns-name" | "add" }>) {
+  if (target.syncWildcard !== false) throw new HttpError(400, "泛域名同步已开启，请重新选择主域名记录操作");
+  if (pending.targetDomain !== target.domain || pending.zoneId !== target.zoneId) throw new HttpError(400, "当前域名已更改，请重新开始操作");
+}
+
+async function startNameInput(settings: Settings, env: Env, chatId: number, userId: number, operation: "add" | "edit", type: RecordType, record?: DnsRecord, callback?: TelegramCallbackQuery) {
+  const target = targetFromSettings(settings);
+  if (target.syncWildcard !== false) throw new HttpError(400, "开启泛域名同步时不能编辑子域名");
+  const page = await selectionPage(env, chatId, userId);
+  await setPending(env, chatId, userId, { kind: "dns-name", operation, type, recordId: record?.id, page, targetDomain: target.domain, zoneId: target.zoneId });
+  const text = [
+    operation === "add" ? `新增 ${type} 记录 · 子域名前缀` : "编辑子域名前缀",
+    `当前域名：<code>${escapeHtml(target.domain)}</code>`,
+    ...(record ? [`当前记录：<code>${escapeHtml(record.name)}</code>`] : []),
+    "",
+    "只填前缀，例如：www",
+    `发送 <code>www</code> → <code>www.${escapeHtml(target.domain)}</code>`,
+    "支持多级前缀（如 api.v2）或当前域名下的完整名称。",
+    "发送 @ 或点击“使用主域名”表示主域名。",
+  ].join("\n");
+  if (callback) return editText(settings, callback, text, dnsNameKeyboard());
+  return sendText(settings, chatId, text, dnsNameKeyboard());
+}
+
+async function showAddContent(settings: Settings, env: Env, chatId: number, userId: number, type: RecordType, name: string, page = 0, callback?: TelegramCallbackQuery) {
+  const target = targetFromSettings(settings);
+  await setPending(env, chatId, userId, { kind: "add", type, name, page, targetDomain: target.domain, zoneId: target.zoneId });
+  const text = `新增 ${type}\n完整记录名称：<code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`;
+  if (callback) return editText(settings, callback, text, addContentKeyboard(target));
+  return sendText(settings, chatId, text, addContentKeyboard(target));
+}
+
+async function acceptNameInput(settings: Settings, env: Env, chatId: number, userId: number, pending: Extract<PendingInput, { kind: "dns-name" }>, value: string, callback?: TelegramCallbackQuery) {
+  const target = targetFromSettings(settings);
+  assertNameInputTarget(target, pending);
+  const name = resolveDnsName(target, value);
+  if (pending.operation === "add") return showAddContent(settings, env, chatId, userId, pending.type, name, pending.page, callback);
+  const record = await findRecord(target, env, settings, pending.recordId || "");
+  if (!record) throw new HttpError(404, "记录不存在或已被删除");
+  await setPending(env, chatId, userId, { ...pending, name, ready: true });
+  const text = `确认修改记录名称\n\n原名称：<code>${escapeHtml(record.name)}</code>\n完整记录名称：<code>${escapeHtml(name)}</code>\n\n保留 ${escapeHtml(record.type)} 内容：<code>${escapeHtml(record.content)}</code>\n也可发送其他前缀重新选择。`;
+  if (callback) return editText(settings, callback, text, dnsNameKeyboard(true));
+  return sendText(settings, chatId, text, dnsNameKeyboard(true));
 }
 
 function resultKeyboard(page = 0): TelegramReplyMarkup {
@@ -390,7 +476,7 @@ async function startBulkEdit(
 ) {
   const target = targetFromSettings(settings);
   const records = await loadRecords(target, env, settings);
-  const values = records.map((record) => record.name === target.domain ? record.content.trim() : `${record.type} ${record.name} ${record.content.trim()}`).filter(Boolean);
+  const values = records.map((record) => record.name === target.domain ? record.content.trim() : `${record.name.slice(0, -target.domain.length - 1)} ${record.content.trim()}`).filter(Boolean);
   await setPending(env, chatId, userId, { kind: "bulk", page: await selectionPage(env, chatId, userId) });
   const current = values.length
     ? `<pre>${escapeHtml(values.join("\n"))}</pre>`
@@ -399,7 +485,9 @@ async function startBulkEdit(
     "批量编辑 DNS",
     `<code>${escapeHtml(target.domain)}</code> 当前有 ${values.length} 条可编辑记录。`,
     "",
-    "请发送新的内容，每行一个 IP 或目标域名；关闭泛域名同步后，子域名使用“名称 内容”格式。保存时会自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
+    dnsModeText(target),
+    target.syncWildcard === false ? `每行输入“前缀 内容”，例如 www 1.1.1.1 → www.${escapeHtml(target.domain)}。发送 @ 表示主域名；仅输入内容也表示主域名。` : "每行输入一个 IP 或目标域名，名称固定为主域名，并自动配对泛记录。",
+    "保存时自动识别 A、AAAA 或 CNAME；空行和 # 开头的行会忽略。",
     "",
     "当前记录：",
     current,
@@ -452,9 +540,10 @@ async function showList(settings: Settings, env: Env, chatId: number, userId: nu
   else await sendText(settings, chatId, text, markup);
 }
 
-function recordActionKeyboard(record: DnsRecord, page: number): TelegramReplyMarkup {
+function recordActionKeyboard(record: DnsRecord, page: number, target: DnsTarget): TelegramReplyMarkup {
   return { inline_keyboard: [
     [button("编辑内容", `edit:${record.id}`), button("删除记录", `delete:${record.id}`)],
+    ...(target.syncWildcard === false ? [[button("编辑子域名", `edit-name:${record.id}`)]] : []),
     [button("返回列表", `list:${page}`)],
   ] };
 }
@@ -465,7 +554,7 @@ async function showRecordActions(settings: Settings, env: Env, callback: Telegra
   const record = await findRecord(target, env, settings, id);
   if (!record) throw new HttpError(404, "记录不存在或已被删除");
   const page = await selectionPage(env, chatId, callback.from.id);
-  return editText(settings, callback, `DNS 记录\n${recordText(record)}\n\n请选择操作：`, recordActionKeyboard(record, page));
+  return editText(settings, callback, `DNS 记录\n${recordText(record)}\n\n${dnsModeText(target)}\n请选择操作：`, recordActionKeyboard(record, page, target));
 }
 
 async function startContentEdit(
@@ -487,7 +576,7 @@ async function startContentEdit(
     page,
   });
   const text = `编辑 DNS 记录\n${recordText(record)}\n\n请发送新的 IP 或 CNAME 目标。`;
-  const markup = editPromptKeyboard(record.id);
+  const markup = editPromptKeyboard(record.id, targetFromSettings(settings));
   if (callback) await editText(settings, callback, text, markup);
   else await sendText(settings, chatId, text, markup);
 }
@@ -551,7 +640,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     };
     return showList(scopedSettings, env, chatId, callback.from.id, 0, callback);
   }
-  if (data === "menu:help") return editText(settings, callback, helpText(), backKeyboard());
+  if (data === "menu:help") return editText(settings, callback, helpText(settings), backKeyboard());
   if (data === "menu:list") return showList(settings, env, chatId, callback.from.id, 0, callback);
   if (data.startsWith("list:")) return showList(settings, env, chatId, callback.from.id, Number(data.slice(5)) || 0, callback);
   if (data === "menu:manual") return showManualIps(settings, chatId, callback);
@@ -593,9 +682,33 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const type = recordType(data.slice(9));
     if (!type) throw new HttpError(400, "不支持的 DNS 记录类型");
     const target = targetFromSettings(settings);
-    const name = target.domain;
-    await setPending(env, chatId, callback.from.id, { kind: "add", type, name });
-    return editText(settings, callback, `新增 ${type} · <code>${escapeHtml(name)}</code>\n\n请发送记录内容：\n${type === "A" ? "例如：1.1.1.1" : type === "AAAA" ? "例如：2606:4700:4700::1111" : "例如：target.example.net"}`, cancelKeyboard());
+    if (target.syncWildcard === false) return startNameInput(settings, env, chatId, callback.from.id, "add", type, undefined, callback);
+    return showAddContent(settings, env, chatId, callback.from.id, type, target.domain, 0, callback);
+  }
+  if (data.startsWith("dns-name:")) {
+    const pending = await getPending(env, chatId, callback.from.id);
+    if (!pending || (pending.kind !== "dns-name" && pending.kind !== "add")) throw new HttpError(400, "名称编辑状态已失效，请重新开始操作");
+    const target = targetFromSettings(settings);
+    assertNameInputTarget(target, pending);
+    if (data === "dns-name:change" && pending.kind === "add") return startNameInput(settings, env, chatId, callback.from.id, "add", pending.type, undefined, callback);
+    if (data === "dns-name:root" && pending.kind === "dns-name") return acceptNameInput(settings, env, chatId, callback.from.id, pending, "@", callback);
+    if (data === "dns-name:save" && pending.kind === "dns-name" && pending.operation === "edit" && pending.ready && pending.name) {
+      const record = await findRecord(target, env, settings, pending.recordId || "");
+      if (!record) throw new HttpError(404, "记录不存在或已被删除");
+      const updated = await updateDnsRecord(target, record.id, { name: pending.name, content: record.content }, env, settings.cfApiToken);
+      await clearPending(env, chatId, callback.from.id);
+      return editText(settings, callback, `名称已修改\n\n${recordText(updated)}`, resultKeyboard(pending.page));
+    }
+    throw new HttpError(400, "请先输入子域名前缀，再确认修改名称");
+  }
+  if (data.startsWith("edit-name:")) {
+    const target = targetFromSettings(settings);
+    if (target.syncWildcard !== false) throw new HttpError(400, "开启泛域名同步时不能编辑子域名");
+    const record = await findRecord(target, env, settings, data.slice(10));
+    if (!record) throw new HttpError(404, "记录不存在或已被删除");
+    const type = recordType(record.type);
+    if (!type) throw new HttpError(400, "不支持编辑此记录类型");
+    return startNameInput(settings, env, chatId, callback.from.id, "edit", type, record, callback);
   }
   if (data.startsWith("record:")) return showRecordActions(settings, env, callback, data.slice(7));
   if (data.startsWith("edit-options:")) {
@@ -605,7 +718,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     await clearPending(env, chatId, callback.from.id);
     const type = recordType(record.type);
     if (!type) throw new HttpError(400, "不支持编辑此记录类型");
-    return editText(settings, callback, `完整编辑\n\n当前：<code>${escapeHtml(record.type)} ${escapeHtml(record.name)}</code>\n<code>${escapeHtml(record.content)}</code>\n\n请选择新的记录类型：`, editTypeKeyboard(record.id, type));
+    return editText(settings, callback, `完整编辑\n\n当前：<code>${escapeHtml(record.type)} ${escapeHtml(record.name)}</code>\n<code>${escapeHtml(record.content)}</code>\n\n请选择新的记录类型${target.syncWildcard === false ? "或编辑子域名" : ""}：`, editTypeKeyboard(record.id, type, target));
   }
   if (data.startsWith("edit:type:")) {
     const parts = data.split(":");
@@ -616,7 +729,7 @@ async function handleCallback(settings: Settings, env: Env, callback: TelegramCa
     const record = await findRecord(target, env, settings, recordId);
     if (!record) throw new HttpError(404, "记录不存在或已被删除");
     await setPending(env, chatId, callback.from.id, { kind: "edit", type, name: record.name, recordId, page: await selectionPage(env, chatId, callback.from.id) });
-    return editText(settings, callback, `完整编辑 · ${type} <code>${escapeHtml(target.domain)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, cancelKeyboard());
+    return editText(settings, callback, `完整编辑 · ${type} <code>${escapeHtml(record.name)}</code>\n\n当前内容：<code>${escapeHtml(record.content)}</code>\n\n请发送新的记录内容：`, editPromptKeyboard(record.id, target));
   }
   if (data.startsWith("edit-content:")) {
     const target = targetFromSettings(settings);
@@ -665,6 +778,7 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
     return sendText(settings, chatId, `手动优选 IP 配置已保存\n\n当前配置：${manualIps.length} 个\n\n<pre>${escapeHtml(manualIps.join("\n"))}</pre>`, manualIpsKeyboard({ ...settings, manualIps }));
   }
   const target = targetFromSettings(settings);
+  if (pending.kind === "dns-name") return acceptNameInput(settings, env, chatId, message.from!.id, pending, content);
   if (pending.kind === "bulk") {
     const lines = content.split(/\r?\n/);
     const values = lines.map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
@@ -678,7 +792,7 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
       if (columns.length >= 3) {
         if (!recordType(columns.shift() || "")) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
       }
-      return { name: columns.shift()!, content: columns.join(" ") };
+      return { name: resolveDnsName(target, columns.shift()!), content: columns.join(" ") };
     });
     const result = await replaceDnsRecords(target, records, env, settings.cfApiToken);
     await clearPending(env, chatId, message.from!.id);
@@ -691,6 +805,7 @@ async function handlePendingMessage(settings: Settings, env: Env, message: Teleg
   }
   if (!content) throw new HttpError(400, "记录内容不能为空");
   if (pending.kind === "add") {
+    if (pending.targetDomain && (pending.targetDomain !== target.domain || pending.zoneId !== target.zoneId)) throw new HttpError(400, "当前域名已更改，请重新开始操作");
     const record = await createDnsRecord(target, { type: pending.type, name: pending.name, content }, env, settings.cfApiToken);
     await clearPending(env, chatId, message.from!.id);
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard(pending.page ?? 0));
@@ -708,6 +823,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   const chatId = message.chat!.id;
   if (command === "help" || command === "start" || command === "menu") {
     await clearPending(env, chatId, message.from!.id);
+    if (command === "help") return sendText(settings, chatId, helpText(settings), backKeyboard());
     return showHome(settings, chatId);
   }
   if (command === "cancel") {
@@ -740,17 +856,17 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
   if (command === "add" && args.length >= 3) {
     const type = recordType(args[1]);
     if (!type) throw new HttpError(400, "仅支持 A、AAAA、CNAME");
-    const suppliedName = args.length >= 4 ? args[2].toLowerCase() : "";
-    const hasExplicitName = isAllowedDnsRecordName(target.domain, suppliedName, target.syncWildcard !== false);
-    if (args.length >= 4 && !hasExplicitName) throw new HttpError(400, target.syncWildcard === false ? `记录名称必须是 ${target.domain} 或其有效子域名，不能使用泛域名` : `记录名称只能是 ${target.domain}`);
-    const name = hasExplicitName ? suppliedName : target.domain;
+    const hasExplicitName = args.length >= 4;
+    const name = hasExplicitName ? resolveDnsName(target, args[2]) : target.domain;
     const record = await createDnsRecord(target, { type, name, content: args.slice(hasExplicitName ? 3 : 2).join(" ") }, env, settings.cfApiToken);
     return sendText(settings, chatId, `新增成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length >= 4) {
-    const hasLegacyName = args.length >= 5 && args[3].toLowerCase() === target.domain;
-    const content = args.slice(hasLegacyName ? 4 : 3).join(" ");
-    const record = await updateDnsRecord(target, args[1], { type: detectDnsRecordType(content), name: hasLegacyName ? args[3] : target.domain, content }, env, settings.cfApiToken);
+    const current = await findRecord(target, env, settings, args[1]);
+    if (!current) throw new HttpError(404, "记录不存在或已被删除");
+    const hasExplicitName = args.length >= 5;
+    const content = args.slice(hasExplicitName ? 4 : 3).join(" ");
+    const record = await updateDnsRecord(target, args[1], { type: detectDnsRecordType(content), name: hasExplicitName ? resolveDnsName(target, args[3]) : current.name, content }, env, settings.cfApiToken);
     return sendText(settings, chatId, `修改成功\n\n${recordText(record)}`, resultKeyboard());
   }
   if (command === "update" && args.length === 2) {
@@ -788,7 +904,7 @@ async function handleCommand(settings: Settings, env: Env, message: TelegramMess
     await deleteDnsRecord(target, args[1], env, settings.cfApiToken);
     return sendText(settings, chatId, `删除成功：<code>${escapeHtml(args[1])}</code>`, resultKeyboard());
   }
-  return sendText(settings, chatId, helpText(), backKeyboard());
+  return sendText(settings, chatId, helpText(settings), backKeyboard());
 }
 
 export async function handleTelegramWebhook(request: Request, env: Env) {

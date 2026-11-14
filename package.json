@@ -11,8 +11,9 @@
     "check:ui": "node scripts/check-ui.mjs",
     "check:auto-sync": "node scripts/check-auto-sync.mjs",
     "check:dns": "node scripts/check-dns.mjs",
+    "check:telegram": "node scripts/check-telegram-update.mjs && node scripts/check-telegram-subdomains.mjs",
     "check:regions": "node scripts/check-ip-regions.mjs",
-    "check": "npm run typecheck && npm run check:ui && npm run check:auto-sync && npm run check:dns && npm run check:regions && wrangler deploy --dry-run"
+    "check": "npm run typecheck && npm run check:ui && npm run check:auto-sync && npm run check:dns && npm run check:telegram && npm run check:regions && wrangler deploy --dry-run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260730.1",
